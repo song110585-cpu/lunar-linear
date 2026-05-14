@@ -181,6 +181,9 @@ if __name__ == '__main__':
     IN_CHANNELS  = 5       # WAC, DEM, Slope, TPI, 剖面曲率
     MODEL_SIZE   = 'small'  # 'tiny' 验证流程, 正式训练改为 'small' 或 'base'
     FREEZE_STAGES = 1      # 冻结 backbone 前 N 个阶段 (0=不冻结)
+    USE_AUGMENT   = True
+    USE_COPYPASTE = True       # CopyPaste 增强 (针对 Fault/Graben 少数类)
+    COPYPASTE_P   = 0.5        # CopyPaste 触发概率
 
     class HyperParameter:
         def __init__(self):
@@ -229,12 +232,77 @@ if __name__ == '__main__':
         model.freeze_backbone_stages(FREEZE_STAGES)
 
     # =========================
-    # 数据集 (暂不做通道归一化; 统计 mean/std 后再填入)
+    # 数据集 + 数据增强 (R16: 翻转+旋转+噪声+Cutout+CopyPaste)
     # =========================
-    train_data = MyDataset(
+    import random
+
+    class AugmentedDataset(torch.utils.data.Dataset):
+        """强化增强: 翻转 + 旋转 + 高斯噪声 + 亮度扰动 + Cutout + CopyPaste"""
+        def __init__(self, base_dataset, copypaste=False, copypaste_p=0.5):
+            self.base = base_dataset
+            self.copypaste = copypaste
+            self.copypaste_p = copypaste_p
+            if self.copypaste:
+                self.rare_indices = []
+                print('CopyPaste: 预索引少数类样本...')
+                for i in range(len(self.base)):
+                    _, mask, _ = self.base[i]
+                    classes_present = set(mask.unique().tolist())
+                    if 3 in classes_present or 4 in classes_present:
+                        self.rare_indices.append(i)
+                print(f'CopyPaste: 找到 {len(self.rare_indices)} 张含 Fault/Graben 的样本')
+
+        def __len__(self):
+            return len(self.base)
+
+        def __getitem__(self, idx):
+            img, mask, name = self.base[idx]
+            if self.copypaste and self.rare_indices and random.random() < self.copypaste_p:
+                donor_idx = random.choice(self.rare_indices)
+                donor_img, donor_mask, _ = self.base[donor_idx]
+                rare_fg = (donor_mask == 3) | (donor_mask == 4)
+                if rare_fg.any():
+                    fg_mask = rare_fg.unsqueeze(0).expand_as(img)
+                    img = torch.where(fg_mask, donor_img, img)
+                    mask = torch.where(rare_fg, donor_mask, mask)
+            if random.random() > 0.5:
+                img = img.flip(-1); mask = mask.flip(-1)
+            if random.random() > 0.5:
+                img = img.flip(-2); mask = mask.flip(-2)
+            k = random.randint(0, 3)
+            if k > 0:
+                img = torch.rot90(img, k, [-2, -1])
+                mask = torch.rot90(mask, k, [-2, -1])
+            if random.random() > 0.5:
+                img = img + torch.randn_like(img) * 0.02
+            if random.random() > 0.5:
+                C = img.shape[0]
+                img = img + (torch.rand(C, 1, 1) - 0.5) * 0.1
+            if random.random() > 0.7:
+                _, H, W = img.shape
+                for _ in range(random.randint(1, 3)):
+                    sz = random.randint(32, 64)
+                    y, x = random.randint(0, H - sz), random.randint(0, W - sz)
+                    img[:, y:y+sz, x:x+sz] = 0.0
+            return img, mask, name
+
+    train_data_raw = MyDataset(
         images_dir=hp.train_image_dir,
         masks_dir=hp.train_mask_dir,
     )
+    if USE_AUGMENT:
+        train_data = AugmentedDataset(
+            train_data_raw,
+            copypaste=USE_COPYPASTE,
+            copypaste_p=COPYPASTE_P,
+        )
+        aug_str = '翻转+旋转+噪声+Cutout'
+        if USE_COPYPASTE:
+            aug_str += f'+CopyPaste(p={COPYPASTE_P})'
+        print(f'数据增强: {aug_str}')
+    else:
+        train_data = train_data_raw
+
     train_iter = DataLoader(
         dataset=train_data, batch_size=hp.train_batchsize,
         shuffle=True, drop_last=False,
