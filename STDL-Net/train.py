@@ -179,20 +179,21 @@ if __name__ == '__main__':
     # =========================
     NUM_CLASSES  = 5       # 0=背景, 1=皱脊, 2=月溪, 3=断层, 4=地堑
     IN_CHANNELS  = 5       # WAC, DEM, Slope, TPI, 剖面曲率
-    MODEL_SIZE   = 'tiny'  # 'tiny' 验证流程, 正式训练改为 'small' 或 'base'
-    FREEZE_STAGES = 2      # 冻结 backbone 前 N 个阶段 (0=不冻结)
+    MODEL_SIZE   = 'small'  # 'tiny' 验证流程, 正式训练改为 'small' 或 'base'
+    FREEZE_STAGES = 1      # 冻结 backbone 前 N 个阶段 (0=不冻结)
 
     class HyperParameter:
         def __init__(self):
             curr_time = datetime.datetime.now()
             curr_time_str = curr_time.strftime("_%Y%m%d_%H%M%S")
             self.name = "_result" + curr_time_str
-            self.num_epochs = 2    # 快速验证用 2, 正式训练改为 30~50
-            self.max_steps = 50    # 每 epoch 只跑 50 步 (0=跑全部)
-            self.learning_rate = 1e-5
+            self.num_epochs = 60   # 快速验证用 2, 正式训练改为 30~50
+            self.max_steps =0   # 每 epoch 只跑 50 步 (0=跑全部)
+            self.learning_rate = 5e-5
             self.train_batchsize = 1
             self.test_batchsize = 1
             self.accum_steps = 4          # 梯度累积, 等效 batch_size = 1*4 = 4
+            self.patience = 12            # Early stopping patience
             # ---- 数据路径 ----
             self.train_image_dir = r'E:\月球_dataset\Research area\train\dataset\image'
             self.train_mask_dir  = r'E:\月球_dataset\Research area\train\dataset\mask'
@@ -253,24 +254,38 @@ if __name__ == '__main__':
     print(f'训练集: {len(train_data)} 张,  测试集: {len(test_data)} 张')
 
     # =========================
-    # 损失函数 (带类别权重的 CrossEntropyLoss)
+    # 损失函数 (R13: CE + 0.5*Dice)
     # =========================
-    # 训练集像素频率统计 (来自之前的 check 脚本)
-    pixel_counts = torch.tensor(
-        [1000701422, 8999948, 2846189, 4067233, 3911800],
-        dtype=torch.float64,
-    )
-    freq = pixel_counts / pixel_counts.sum()
-    class_weights = (freq.median() / freq).float().to(device)
+    class_weights = torch.tensor([0.15, 1.0, 1.3, 1.8, 1.5], dtype=torch.float32).to(device)
     print('class_weights:', [f'{w:.4f}' for w in class_weights.tolist()])
+    ce_loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
-    loss = nn.CrossEntropyLoss(weight=class_weights)
+    def dice_loss(logits, targets, smooth=1.0):
+        """前景类 Dice Loss"""
+        probs = torch.softmax(logits, dim=1)
+        dice = 0.0
+        for c in range(1, logits.shape[1]):
+            p = probs[:, c]
+            g = (targets == c).float()
+            inter = (p * g).sum(dim=(1, 2))
+            union = p.sum(dim=(1, 2)) + g.sum(dim=(1, 2))
+            dice += (1 - (2 * inter + smooth) / (union + smooth)).mean()
+        return dice / (logits.shape[1] - 1)
+
+    def combined_loss(logits, targets):
+        return ce_loss_fn(logits, targets) + 0.5 * dice_loss(logits, targets)
+
+    loss = combined_loss
+    print('Loss: CE(weights) + 0.5*Dice')
 
     # =========================
     # 优化器 & 调度器
     # =========================
-    opt = optim.AdamW(model.parameters(), lr=hp.learning_rate)
-    scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=30, gamma=0.1)
+    opt = optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=hp.learning_rate, weight_decay=0.01
+    )
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=hp.num_epochs, eta_min=1e-6)
 
     # =========================
     # 训练
