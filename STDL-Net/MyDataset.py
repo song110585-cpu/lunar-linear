@@ -13,9 +13,8 @@ from torch.utils.data import Dataset
 
 
 # 归一化参数 (dataset_v3 训练集统计, 数据已预先归一化到 [0, 1])
-CHANNEL_MEAN = [0.1739, 0.5513, 0.1149, 0.4873, 0.4495]
-CHANNEL_STD  = [0.0768, 0.4126, 0.1277, 0.2191, 0.2256]
-
+CHANNEL_MEAN = [0.1730, 0.5849, 0.1184, 0.4894, 0.4504]
+CHANNEL_STD  = [0.0780, 0.4036, 0.1271, 0.2143, 0.2213]
 
 class MyDataset(Dataset):
     """
