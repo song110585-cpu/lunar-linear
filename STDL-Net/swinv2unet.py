@@ -1293,9 +1293,63 @@ class Swin_LCSRB_PSP_FPNPAN(nn.Module):
             if isinstance(module, nn.BatchNorm2d): module.eval()
 
 
+class StripPooling(nn.Module):
+    """条带池化模块 (Strip Pooling Module)
+
+    通过 H×1 和 1×W 条带池化捕获全局水平/垂直上下文,
+    增强对长线性构造 (皱脊/月溪/断层/地堑) 的连通性特征提取。
+
+    Reference: Hou et al., "Strip Pooling: Rethinking Spatial Pooling
+               for Scene Parsing", CVPR 2020.
+    """
+    def __init__(self, in_channels):
+        super().__init__()
+        mid_c = in_channels // 4
+
+        # 水平条带: 沿高度池化为 1×W, 捕获水平方向全局上下文
+        self.pool_h = nn.AdaptiveAvgPool2d((1, None))
+        self.conv_h = nn.Sequential(
+            nn.Conv2d(in_channels, mid_c, (1, 3), padding=(0, 1), bias=False),
+            nn.BatchNorm2d(mid_c),
+            nn.ReLU(inplace=True),
+        )
+
+        # 垂直条带: 沿宽度池化为 H×1, 捕获垂直方向全局上下文
+        self.pool_v = nn.AdaptiveAvgPool2d((None, 1))
+        self.conv_v = nn.Sequential(
+            nn.Conv2d(in_channels, mid_c, (3, 1), padding=(1, 0), bias=False),
+            nn.BatchNorm2d(mid_c),
+            nn.ReLU(inplace=True),
+        )
+
+        # 融合: 投射回原通道数, 生成注意力权重
+        self.fuse = nn.Sequential(
+            nn.Conv2d(mid_c, in_channels, 1, bias=False),
+            nn.BatchNorm2d(in_channels),
+        )
+
+    def forward(self, x):
+        _, _, H, W = x.shape
+
+        # 水平条带分支
+        h = self.pool_h(x)                     # (B, C, 1, W)
+        h = self.conv_h(h)                     # (B, mid_c, 1, W)
+        h = F.interpolate(h, size=(H, W), mode='bilinear', align_corners=True)
+
+        # 垂直条带分支
+        v = self.pool_v(x)                     # (B, C, H, 1)
+        v = self.conv_v(v)                     # (B, mid_c, H, 1)
+        v = F.interpolate(v, size=(H, W), mode='bilinear', align_corners=True)
+
+        # 注意力融合 + 残差连接
+        att = torch.sigmoid(self.fuse(h + v))  # (B, C, H, W)
+        return x * att + x
+
+
 class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
     # Implementing only the object path
-    def __init__(self, size="base", img_size=512, num_classes=1, in_channels=3, pretrained=True):
+    def __init__(self, size="base", img_size=512, num_classes=1, in_channels=3, pretrained=True,
+                 use_strip_pooling=False):
         super(Swin_LCSRB_DeformablePSP_FPNPAN, self).__init__()
 
         # 初始化主干网络
@@ -1306,6 +1360,14 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
             feature_channels = [256, 512, 1024, 1024]
         else:  # tiny / small
             feature_channels = [192, 384, 768, 768]
+
+        # ===== Strip Pooling: 深层条带增强 =====
+        self.use_strip_pooling = use_strip_pooling
+        if use_strip_pooling:
+            self.sp2 = StripPooling(feature_channels[2])  # Stage 2 (16×16)
+            self.sp3 = StripPooling(feature_channels[3])  # Stage 3 (16×16)
+            print(f'[StripPooling] enabled on Stage 2 ({feature_channels[2]}ch) & Stage 3 ({feature_channels[3]}ch)')
+
         # 初始化可变形金字塔池化模块和 FPNPAN
         self.PPN = DeformablePSPModule(feature_channels[-1])
         fpn_out = feature_channels[0]
@@ -1339,6 +1401,12 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
 
         # 提取特征
         features = self.backbone.extra_features(x)
+
+        # Strip Pooling: 增强深层特征的长程连通性
+        if self.use_strip_pooling:
+            features[2] = self.sp2(features[2])  # Stage 2
+            features[3] = self.sp3(features[3])  # Stage 3
+
         features[-1] = self.PPN(features[-1])  # 使用可变形 PPM 处理最后一层特征
         features = self.FPNPAN(features)  # 使用 FPNPAN 处理特征
         features = self.conv_fusion(torch.cat((features), dim=1))  # 融合特征

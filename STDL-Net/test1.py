@@ -15,13 +15,13 @@ from PIL import Image
 
 #   只需要改这里！把路径改成你下载的 result 文件夹
 
-RESULT_DIR = r"E:\月球_dataset\baseline模型结果\result16\result\result"  # R13结果
+RESULT_DIR = r"E:\月球_dataset\baseline模型结果\result18\result\result"  # R13结果
 
 # 测试集 GT mask 目录 (一般不用改, 自动搜索)
-TEST_MASK_DIR = r"E:\月球_dataset\Research area\test\dataset_v3\mask"
+TEST_MASK_DIR = r"E:\月球_dataset\Research area\test\dataset_v5\mask"
 
 # 测试集影像目录 (可选, 用于显示 WAC/DEM/Slope)
-TEST_IMG_DIR = r"E:\月球_dataset\Research area\test\dataset_v3\image"
+TEST_IMG_DIR = r"E:\月球_dataset\Research area\test\dataset_v5\image"
 
 # ========== TTA 配置 ==========
 TTA_ENABLED = True                # 设为 True 启用 TTA 推理

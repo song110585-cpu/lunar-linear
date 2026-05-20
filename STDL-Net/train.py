@@ -179,11 +179,12 @@ if __name__ == '__main__':
     # =========================
     NUM_CLASSES  = 5       # 0=背景, 1=皱脊, 2=月溪, 3=断层, 4=地堑
     IN_CHANNELS  = 5       # WAC, DEM, Slope, TPI, 剖面曲率
-    MODEL_SIZE   = 'small'  # 'tiny' 验证流程, 正式训练改为 'small' 或 'base'
+    MODEL_SIZE   = 'small'  # R19: small + StripPooling
     FREEZE_STAGES = 1      # 冻结 backbone 前 N 个阶段 (0=不冻结)
     USE_AUGMENT   = True
     USE_COPYPASTE = True       # CopyPaste 增强 (针对 Fault/Graben 少数类)
     COPYPASTE_P   = 0.5        # CopyPaste 触发概率
+    USE_STRIP_POOLING = True       # R19: 条带池化 (Stage 2 & 3)
 
     class HyperParameter:
         def __init__(self):
@@ -226,6 +227,7 @@ if __name__ == '__main__':
         num_classes=NUM_CLASSES,
         in_channels=IN_CHANNELS,
         pretrained=True,
+        use_strip_pooling=USE_STRIP_POOLING,
     ).to(device)
 
     if FREEZE_STAGES > 0:
@@ -322,9 +324,9 @@ if __name__ == '__main__':
     print(f'训练集: {len(train_data)} 张,  测试集: {len(test_data)} 张')
 
     # =========================
-    # 损失函数 (R13: CE + 0.5*Dice)
+    # 损失函数 (CE + 0.5*Dice)
     # =========================
-    class_weights = torch.tensor([0.15, 1.0, 1.3, 1.8, 1.5], dtype=torch.float32).to(device)
+    class_weights = torch.tensor([0.15, 1.0, 1.3, 1.8, 2.5], dtype=torch.float32).to(device)
     print('class_weights:', [f'{w:.4f}' for w in class_weights.tolist()])
     ce_loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
