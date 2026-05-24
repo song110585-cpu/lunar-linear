@@ -3,7 +3,7 @@
 
 使用方法:
     1. 修改下面 RESULT_DIR 为你的 result 文件夹路径
-    2. 直接运行本脚本: python test1.py
+    2. 直接运行本脚本: python visualize_result.py
     3. 输出图表保存在 RESULT_DIR/visualization/ 下
 """
 import os
@@ -15,7 +15,7 @@ from PIL import Image
 
 #   只需要改这里！把路径改成你下载的 result 文件夹
 
-RESULT_DIR = r"E:\月球_dataset\baseline模型结果\result18\result\result"  # R13结果
+RESULT_DIR = r"E:\月球_dataset\baseline模型结果\result19"  # R13结果
 
 # 测试集 GT mask 目录 (一般不用改, 自动搜索)
 TEST_MASK_DIR = r"E:\月球_dataset\Research area\test\dataset_v5\mask"
@@ -25,8 +25,9 @@ TEST_IMG_DIR = r"E:\月球_dataset\Research area\test\dataset_v5\image"
 
 # ========== TTA 配置 ==========
 TTA_ENABLED = True                # 设为 True 启用 TTA 推理
-MODEL_PATH = r"E:\月球_dataset\baseline模型结果\result13\result\result\best_small.pth"   # best_small.pth 路径
+MODEL_PATH = r"E:\月球_dataset\baseline模型结果\result19\result\result\best_small.pth"   # best_small.pth 路径
 MODEL_SIZE = 'small'
+USE_STRIP_POOLING = True           # R19 模型=True; R17/R18 baseline 模型=False
 TTA_OUTPUT_DIR = ''                # 留空则自动设为 RESULT_DIR/tta_pred_mask
 
 # ========== 配置 ==========
@@ -400,14 +401,15 @@ def tta_inference(model_path, model_size, test_img_dir, output_dir):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f'  TTA device: {device}')
 
-    # 创建模型 (monkey-patch torch.load 跳过预训练权重, 因为本地可能没有预训练文件)
+    # 创建模型 (跳过预训练权重加载, 因为本地可能没有预训练文件)
     _orig_torch_load = torch.load
     def _dummy_load(*args, **kwargs):
         return {}
-    torch.load = _dummy_load
+    torch.load = _dummy_load  # 临时替换, 跳过 swinv2unet 内部的预训练加载
     try:
         model = Swin_LCSRB_DeformablePSP_FPNPAN(
-            size=model_size, num_classes=NUM_CLASSES, in_channels=5, pretrained=False
+            size=model_size, num_classes=NUM_CLASSES, in_channels=5, pretrained=False,
+            use_strip_pooling=USE_STRIP_POOLING,
         )
     finally:
         torch.load = _orig_torch_load  # 恢复

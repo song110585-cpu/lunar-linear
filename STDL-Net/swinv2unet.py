@@ -1293,6 +1293,54 @@ class Swin_LCSRB_PSP_FPNPAN(nn.Module):
             if isinstance(module, nn.BatchNorm2d): module.eval()
 
 
+class CoordinateAttention(nn.Module):
+    """坐标注意力模块 (Coordinate Attention)
+
+    通过方向感知的通道注意力选择性增强线性构造特征。
+    与 Strip Pooling 不同, CA 学习哪些通道/位置是重要的,
+    不会盲目引入全局噪声, 更适合构造稀疏的月球表面。
+
+    Reference: Hou et al., "Coordinate Attention for Efficient
+               Mobile Network Design", CVPR 2021.
+    """
+    def __init__(self, in_channels, reduction=32):
+        super().__init__()
+        mid_c = max(8, in_channels // reduction)
+
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # (B, C, H, 1)
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # (B, C, 1, W)
+
+        # 共享变换
+        self.conv1 = nn.Conv2d(in_channels, mid_c, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(mid_c)
+        self.act = nn.Hardswish(inplace=True)
+
+        # 分支: H 方向和 W 方向独立生成注意力
+        self.conv_h = nn.Conv2d(mid_c, in_channels, kernel_size=1, bias=False)
+        self.conv_w = nn.Conv2d(mid_c, in_channels, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        # 编码位置信息
+        x_h = self.pool_h(x)                          # (B, C, H, 1)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)     # (B, C, W, 1)
+
+        # 拼接后共享变换
+        y = torch.cat([x_h, x_w], dim=2)             # (B, C, H+W, 1)
+        y = self.act(self.bn1(self.conv1(y)))         # (B, mid_c, H+W, 1)
+
+        # 分割回 H 和 W
+        x_h, x_w = torch.split(y, [H, W], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)               # (B, mid_c, 1, W)
+
+        # 生成方向注意力图
+        a_h = torch.sigmoid(self.conv_h(x_h))        # (B, C, H, 1)
+        a_w = torch.sigmoid(self.conv_w(x_w))        # (B, C, 1, W)
+
+        return x * a_h * a_w
+
+
 class StripPooling(nn.Module):
     """条带池化模块 (Strip Pooling Module)
 
@@ -1349,7 +1397,7 @@ class StripPooling(nn.Module):
 class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
     # Implementing only the object path
     def __init__(self, size="base", img_size=512, num_classes=1, in_channels=3, pretrained=True,
-                 use_strip_pooling=False):
+                 use_strip_pooling=False, use_coord_attention=False):
         super(Swin_LCSRB_DeformablePSP_FPNPAN, self).__init__()
 
         # 初始化主干网络
@@ -1361,9 +1409,15 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
         else:  # tiny / small
             feature_channels = [192, 384, 768, 768]
 
-        # ===== Strip Pooling: 深层条带增强 =====
+        # ===== 注意力模块选择 =====
         self.use_strip_pooling = use_strip_pooling
-        if use_strip_pooling:
+        self.use_coord_attention = use_coord_attention
+
+        if use_coord_attention:
+            self.ca2 = CoordinateAttention(feature_channels[2])  # Stage 2
+            self.ca3 = CoordinateAttention(feature_channels[3])  # Stage 3
+            print(f'[CoordAttention] enabled on Stage 2 ({feature_channels[2]}ch) & Stage 3 ({feature_channels[3]}ch)')
+        elif use_strip_pooling:
             self.sp2 = StripPooling(feature_channels[2])  # Stage 2 (16×16)
             self.sp3 = StripPooling(feature_channels[3])  # Stage 3 (16×16)
             print(f'[StripPooling] enabled on Stage 2 ({feature_channels[2]}ch) & Stage 3 ({feature_channels[3]}ch)')
@@ -1402,8 +1456,11 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
         # 提取特征
         features = self.backbone.extra_features(x)
 
-        # Strip Pooling: 增强深层特征的长程连通性
-        if self.use_strip_pooling:
+        # 注意力增强深层特征
+        if self.use_coord_attention:
+            features[2] = self.ca2(features[2])  # Stage 2
+            features[3] = self.ca3(features[3])  # Stage 3
+        elif self.use_strip_pooling:
             features[2] = self.sp2(features[2])  # Stage 2
             features[3] = self.sp3(features[3])  # Stage 3
 

@@ -77,9 +77,7 @@ class MyDataset(Dataset):
 
         # 双保险: 把所有不在 0-4 范围的值都合并到 0（处理 99, 9 等异常值）
         mask[(mask > 4) | (mask < 0)] = 0
-
-        # 合并地堑(4) → 断裂(3), 变为 4 类: 0=背景, 1=皱脊, 2=月溪, 3=断裂+地堑
-        mask[mask == 4] = 3
+        # 5 类: 0=背景, 1=皱脊, 2=月溪, 3=断层, 4=地堑
 
         image_tensor = torch.from_numpy(image).float()
         mask_tensor = torch.from_numpy(mask).long()
