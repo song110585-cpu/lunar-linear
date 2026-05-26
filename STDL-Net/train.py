@@ -73,10 +73,15 @@ class HyperParameter:
         self.save_pred_vis_png = True
 
         # ---- 数据路径 ----
-        self.train_image_dir = r'E:\月球_dataset\Research area\train\dataset\image'
-        self.train_mask_dir  = r'E:\月球_dataset\Research area\train\dataset\mask'
-        self.test_image_dir  = r'E:\月球_dataset\Research area\test\dataset\image'
-        self.test_mask_dir   = r'E:\月球_dataset\Research area\test\dataset\mask'
+        self.train_image_dir = r'E:\月球_dataset\Research area\train\dataset_v5\image'
+        self.train_mask_dir  = r'E:\月球_dataset\Research area\train\dataset_v5\mask'
+        self.test_image_dir  = r'E:\月球_dataset\Research area\test\dataset_v5\image'
+        self.test_mask_dir   = r'E:\月球_dataset\Research area\test\dataset_v5\mask'
+
+        # ---- 数据过滤清单 (analyze_dataset.py 输出, 设为 None 表示不过滤) ----
+        _filter_dir = r'E:\月球_dataset\Research area\dataset_analysis'
+        self.train_valid_list = os.path.join(_filter_dir, 'valid_tiles_train.txt')
+        self.test_valid_list  = os.path.join(_filter_dir, 'valid_tiles_test.txt')
 
         # ---- 输出路径 ----
         self.record_path = r'E:\月球_dataset\Research area\result'
@@ -363,8 +368,16 @@ def train(hp: HyperParameter):
     print(f'Total params: {n_params:.1f}M, Trainable: {n_train:.1f}M')
 
     # ---- 数据集 ----
-    train_data_raw = MyDataset(images_dir=hp.train_image_dir, masks_dir=hp.train_mask_dir)
-    test_data = MyDataset(images_dir=hp.test_image_dir, masks_dir=hp.test_mask_dir)
+    train_data_raw = MyDataset(
+        images_dir=hp.train_image_dir,
+        masks_dir=hp.train_mask_dir,
+        valid_list_file=hp.train_valid_list,
+    )
+    test_data = MyDataset(
+        images_dir=hp.test_image_dir,
+        masks_dir=hp.test_mask_dir,
+        valid_list_file=hp.test_valid_list,
+    )
 
     if hp.use_augment:
         train_data = AugmentedDataset(

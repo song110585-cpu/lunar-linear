@@ -31,7 +31,13 @@ class MyDataset(Dataset):
         masks_dir: str,
         mean: Optional[Sequence[float]] = None,
         std: Optional[Sequence[float]] = None,
+        valid_list_file: Optional[str] = None,
     ):
+        """
+        Args:
+            valid_list_file: 可选, 指向 valid_tiles_*.txt 文件 (analyze_dataset.py 输出),
+                只加载列表中的文件名. None 时加载目录下全部 tif.
+        """
         self.images_dir = images_dir
         self.masks_dir = masks_dir
 
@@ -39,10 +45,23 @@ class MyDataset(Dataset):
         self.std = np.array(std if std is not None else CHANNEL_STD, dtype=np.float32)
 
         # image 和 mask 同名, 以 mask 目录为基准
-        self.filenames = sorted(
+        all_files = sorted(
             f for f in os.listdir(masks_dir)
             if f.lower().endswith(('.tif', '.tiff'))
         )
+
+        # 可选: 按 valid 列表过滤
+        if valid_list_file is not None:
+            if not os.path.exists(valid_list_file):
+                raise FileNotFoundError(f'valid_list_file 不存在: {valid_list_file}')
+            with open(valid_list_file, 'r', encoding='utf-8') as f:
+                valid_set = set(line.strip() for line in f if line.strip())
+            before = len(all_files)
+            self.filenames = [f for f in all_files if f in valid_set]
+            print(f'[MyDataset] valid_list 过滤: {before} -> {len(self.filenames)} '
+                  f'(剔除 {before - len(self.filenames)} 张, 列表={os.path.basename(valid_list_file)})')
+        else:
+            self.filenames = all_files
 
         # 简单校验
         img_set = set(os.listdir(images_dir))
