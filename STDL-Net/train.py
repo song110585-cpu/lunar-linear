@@ -325,10 +325,10 @@ def export_all_test(model, test_iter, save_root, epoch, num_classes, device, use
     os.makedirs(mask_dir, exist_ok=True)
     os.makedirs(vis_dir, exist_ok=True)
 
-    amp_ctx = torch.amp.autocast('cuda') if use_cuda else nullcontext
+    amp_ctx = torch.amp.autocast('cuda') if use_cuda else nullcontext()
 
     model.eval()
-    with torch.no_grad(), amp_ctx():
+    with torch.no_grad(), amp_ctx:
         for img, label, name in tqdm(test_iter, desc=f'Export@E{epoch}', unit='img'):
             img, label = img.to(device), label.to(device)
             pred = model(img).argmax(dim=1)
@@ -499,7 +499,7 @@ def train(hp: HyperParameter):
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=hp.num_epochs, eta_min=1e-6)
 
     # ---- 训练状态 ----
-    amp_ctx = torch.amp.autocast('cuda') if use_cuda else nullcontext
+    amp_ctx = torch.amp.autocast('cuda') if use_cuda else nullcontext()
     scaler = torch.amp.GradScaler('cuda') if use_cuda else None
     best_miou = 0.0
     best_export_dir = None
@@ -535,7 +535,7 @@ def train(hp: HyperParameter):
                 break
             img, label = img.to(device), label.to(device)
 
-            with amp_ctx():
+            with amp_ctx:
                 logits = model(img)
                 l = loss_fn(logits, label) / hp.accum_steps
 
@@ -570,7 +570,7 @@ def train(hp: HyperParameter):
         model.eval()
         test_losses = []
         test_hist = torch.zeros(hp.num_classes, hp.num_classes, dtype=torch.float64)
-        with torch.no_grad(), amp_ctx():
+        with torch.no_grad(), amp_ctx:
             for img, label, name in tqdm(test_iter, desc='Testing', unit='img'):
                 if hp.max_steps > 0 and len(test_losses) >= hp.max_steps:
                     break
