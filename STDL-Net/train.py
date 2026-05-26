@@ -10,6 +10,8 @@ import shutil
 import datetime
 import random
 import inspect
+import argparse
+import yaml
 from contextlib import nullcontext
 
 import numpy as np
@@ -31,60 +33,133 @@ from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # ============================================================================
+# 环境检测
+# ============================================================================
+
+def detect_env():
+    """自动检测 Kaggle vs 本地环境, 返回路径配置和预训练目录."""
+    if os.path.isdir('/kaggle'):
+        # ---- Kaggle 环境 ----
+        data_root = '/kaggle/input/lunar-data-v3/dataset/dataset'
+        if not os.path.isdir(data_root):
+            data_root = '/kaggle/input/lunar-data-v2/dataset/dataset'
+
+        # 自动查找 valid_tiles_*.txt: 优先 dataset 根目录, 然后逐级向上找
+        def _find_valid_list(filename):
+            candidates = [
+                os.path.join(data_root, filename),
+                os.path.join(os.path.dirname(data_root), filename),
+                os.path.join(os.path.dirname(os.path.dirname(data_root)), filename),
+            ]
+            for p in candidates:
+                if os.path.isfile(p):
+                    return p
+            return None
+
+        return {
+            'is_kaggle': True,
+            'train_image_dir': os.path.join(data_root, 'train', 'image'),
+            'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+            'test_image_dir':  os.path.join(data_root, 'test', 'image'),
+            'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
+            'pretrain_dir':    os.path.join(data_root, 'pretrain'),
+            'record_path':     '/kaggle/working/result',
+            'train_valid_list': _find_valid_list('valid_tiles_train.txt'),
+            'test_valid_list':  _find_valid_list('valid_tiles_test.txt'),
+        }
+    else:
+        # ---- 本地环境 ----
+        _filter_dir = r'E:\月球_dataset\Research area\dataset_analysis'
+        return {
+            'is_kaggle': False,
+            'train_image_dir': r'E:\月球_dataset\Research area\train\dataset_v5\image',
+            'train_mask_dir':  r'E:\月球_dataset\Research area\train\dataset_v5\mask',
+            'test_image_dir':  r'E:\月球_dataset\Research area\test\dataset_v5\image',
+            'test_mask_dir':   r'E:\月球_dataset\Research area\test\dataset_v5\mask',
+            'pretrain_dir':    None,  # 使用 swinv2unet.py 内置路径
+            'record_path':     r'E:\月球_dataset\Research area\result',
+            'train_valid_list': os.path.join(_filter_dir, 'valid_tiles_train.txt'),
+            'test_valid_list':  os.path.join(_filter_dir, 'valid_tiles_test.txt'),
+        }
+
+
+# ============================================================================
 # 配置
 # ============================================================================
 
 
+def load_yaml_config(path):
+    """加载 YAML 配置文件, 返回 dict. 文件不存在时抛出错误."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f'Config file not found: {path}')
+    with open(path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
+
+
 class HyperParameter:
-    def __init__(self):
+    def __init__(self, env=None, config=None):
+        if env is None:
+            env = detect_env()
+
+        # 加载 YAML config (如果提供), 否则用空 dict
+        if isinstance(config, str):
+            config = load_yaml_config(config)
+        elif config is None:
+            config = {}
+
+        self.is_kaggle = env['is_kaggle']
+        self.pretrain_dir = env['pretrain_dir']
+
         curr_time = datetime.datetime.now()
         curr_time_str = curr_time.strftime("_%Y%m%d_%H%M%S")
         self.name = "_result" + curr_time_str
 
-        # ---- 核心参数 ----
-        self.num_classes = 5
-        self.in_channels = 5
-        self.model_size = 'small'       # 'tiny' / 'small' / 'base'
-        self.freeze_stages = 1          # 冻结 backbone 前 N 个阶段
+        # ---- 核心参数 (YAML 覆盖默认值) ----
+        self.num_classes    = config.get('num_classes', 5)
+        self.in_channels    = config.get('in_channels', 5)
+        self.model_size     = config.get('model_size', 'small')
+        self.freeze_stages  = config.get('freeze_stages', 1)
 
-        self.num_epochs = 60
-        self.max_steps = 0             # 每 epoch 步数限制 (0=全跑)
-        self.batch_size = 4
-        self.accum_steps = 1           # 梯度累积, 等效 BS = batch_size * accum_steps
-        self.learning_rate = 5e-5
+        self.num_epochs     = config.get('num_epochs', 60)
+        self.max_steps      = config.get('max_steps', 0)
+        self.batch_size     = config.get('batch_size', 4)
+        self.accum_steps    = config.get('accum_steps', 1)
+        self.learning_rate  = config.get('learning_rate', 5e-5)
 
         # ---- 模块开关 ----
-        self.use_augment = True
-        self.use_copypaste = True
-        self.copypaste_p = 0.5
-        self.use_strip_pooling = False
-        self.use_coord_attention = False
-        self.use_boundary_loss = False
-        self.use_dem_guided = True
-        self.terrain_channels = 4      # 后 4 通道: DEM, Slope, TPI, Curvature
+        self.use_augment        = config.get('use_augment', True)
+        self.use_copypaste      = config.get('use_copypaste', True)
+        self.copypaste_p        = config.get('copypaste_p', 0.5)
+        self.use_strip_pooling  = config.get('use_strip_pooling', False)
+        self.use_coord_attention = config.get('use_coord_attention', False)
+        self.use_boundary_loss  = config.get('use_boundary_loss', False)
+        self.use_dem_guided     = config.get('use_dem_guided', True)
+        self.terrain_channels   = config.get('terrain_channels', 4)
 
         # ---- Early stopping ----
-        self.early_stop = True
-        self.patience = 12
+        self.early_stop = config.get('early_stop', True)
+        self.patience   = config.get('patience', 12)
 
         # ---- 导出开关 ----
-        self.save_all_test_on_best = True
-        self.save_pred_mask_png = True
-        self.save_pred_vis_png = True
+        self.save_all_test_on_best = config.get('save_all_test_on_best', True)
+        self.save_pred_mask_png    = config.get('save_pred_mask_png', True)
+        self.save_pred_vis_png     = config.get('save_pred_vis_png', True)
+
+        # ---- 类别权重 ----
+        self.class_weights = config.get('class_weights', [0.15, 1.0, 1.3, 1.8, 2.5])
 
         # ---- 数据路径 ----
-        self.train_image_dir = r'E:\月球_dataset\Research area\train\dataset_v5\image'
-        self.train_mask_dir  = r'E:\月球_dataset\Research area\train\dataset_v5\mask'
-        self.test_image_dir  = r'E:\月球_dataset\Research area\test\dataset_v5\image'
-        self.test_mask_dir   = r'E:\月球_dataset\Research area\test\dataset_v5\mask'
+        self.train_image_dir = env['train_image_dir']
+        self.train_mask_dir  = env['train_mask_dir']
+        self.test_image_dir  = env['test_image_dir']
+        self.test_mask_dir   = env['test_mask_dir']
 
-        # ---- 数据过滤清单 (analyze_dataset.py 输出, 设为 None 表示不过滤) ----
-        _filter_dir = r'E:\月球_dataset\Research area\dataset_analysis'
-        self.train_valid_list = os.path.join(_filter_dir, 'valid_tiles_train.txt')
-        self.test_valid_list  = os.path.join(_filter_dir, 'valid_tiles_test.txt')
+        # ---- 数据过滤清单 (None 表示不过滤) ----
+        self.train_valid_list = env['train_valid_list']
+        self.test_valid_list  = env['test_valid_list']
 
         # ---- 输出路径 ----
-        self.record_path = r'E:\月球_dataset\Research area\result'
+        self.record_path = env['record_path']
         self.model_save_path = os.path.join(self.record_path, self.name + '.pth')
         self.result_dir = os.path.join(self.record_path, self.name)
 
@@ -331,6 +406,16 @@ def train(hp: HyperParameter):
 
     os.makedirs(hp.result_dir, exist_ok=True)
 
+    # ---- Kaggle: 替换 swinv2unet 内置预训练路径 ----
+    if hp.is_kaggle and hp.pretrain_dir:
+        import swinv2unet
+        swinv2unet._SWIN_V2_PRETRAINED = {
+            'tiny':  os.path.join(hp.pretrain_dir, 'swinv2_tiny_patch4_window16_256.pth'),
+            'small': os.path.join(hp.pretrain_dir, 'swinv2_small_patch4_window16_256.pth'),
+            'base':  os.path.join(hp.pretrain_dir, 'swinv2_base_patch4_window12to16_192to256_22kto1k_ft.pth'),
+        }
+        print('Kaggle: 已注入预训练路径')
+
     # ---- 模型 ----
     init_sig = inspect.signature(Swin_LCSRB_DeformablePSP_FPNPAN.__init__)
     init_params = set(init_sig.parameters.keys())
@@ -400,7 +485,7 @@ def train(hp: HyperParameter):
     print(f'训练 batches/epoch: {len(train_iter)}')
 
     # ---- 损失 ----
-    class_weights = torch.tensor([0.15, 1.0, 1.3, 1.8, 2.5], dtype=torch.float32).to(device)
+    class_weights = torch.tensor(hp.class_weights, dtype=torch.float32).to(device)
     print(f'Class weights: {class_weights.tolist()}')
     ce_loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
@@ -577,8 +662,19 @@ def train(hp: HyperParameter):
 # ============================================================================
 
 if __name__ == '__main__':
-    hp = HyperParameter()
+    parser = argparse.ArgumentParser(description='STDL-Net 月球线性构造分割训练')
+    parser.add_argument('--config', type=str, default=None,
+                        help='YAML 配置文件路径 (如 configs/R24.yaml)')
+    args = parser.parse_args()
 
+    env = detect_env()
+    hp = HyperParameter(env, config=args.config)
+
+    print(f'Environment: {"Kaggle" if hp.is_kaggle else "Local"}')
+    print(f'Data: {hp.train_image_dir}')
+    if hp.train_valid_list:
+        print(f'Train filter: {hp.train_valid_list}')
+        print(f'Test  filter: {hp.test_valid_list}')
     print(f'Model: {hp.model_size}, Epochs: {hp.num_epochs}, '
           f'BS: {hp.batch_size}x{hp.accum_steps}(eff={hp.batch_size * hp.accum_steps}), '
           f'LR: {hp.learning_rate}')
