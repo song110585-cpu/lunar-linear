@@ -1293,6 +1293,80 @@ class Swin_LCSRB_PSP_FPNPAN(nn.Module):
             if isinstance(module, nn.BatchNorm2d): module.eval()
 
 
+class TerrainEncoder(nn.Module):
+    """轻量地形编码器 (Terrain Encoder)
+
+    从地形通道 (DEM/Slope/TPI/Curvature) 单独提取多尺度地形语义特征,
+    用于引导主干网络的光学特征。输出尺度与 Swin V2 backbone 对齐:
+    Stage 0: 1/4, Stage 1: 1/8, Stage 2: 1/16, Stage 3: 1/16
+    """
+    def __init__(self, in_channels=4, channels=(192, 384, 768, 768)):
+        super().__init__()
+        # Stage 0: 1/4 (两次 stride=2)
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_channels, 64, 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.GELU(),
+            nn.Conv2d(64, channels[0], 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(channels[0]),
+            nn.GELU(),
+        )
+        # Stage 1: 1/8
+        self.s1 = nn.Sequential(
+            nn.Conv2d(channels[0], channels[1], 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(channels[1]),
+            nn.GELU(),
+        )
+        # Stage 2: 1/16
+        self.s2 = nn.Sequential(
+            nn.Conv2d(channels[1], channels[2], 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(channels[2]),
+            nn.GELU(),
+        )
+        # Stage 3: 1/16 (与 Swin Stage 3 对齐, 不再下采样)
+        self.s3 = nn.Sequential(
+            nn.Conv2d(channels[2], channels[3], 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels[3]),
+            nn.GELU(),
+        )
+
+    def forward(self, x):
+        f0 = self.stem(x)   # 1/4
+        f1 = self.s1(f0)    # 1/8
+        f2 = self.s2(f1)    # 1/16
+        f3 = self.s3(f2)    # 1/16
+        return [f0, f1, f2, f3]
+
+
+class TerrainGuidedFusion(nn.Module):
+    """地形引导融合 (Terrain-Guided Fusion)
+
+    跨模态条件门控: 同时利用主干特征 F_i 和地形特征 T_i 生成门控信号:
+        G_i = sigmoid( Conv1x1( [F_i, T_i] ) )
+        F'_i = F_i * G_i + F_i
+
+    相比旧版 (门控只看 T_i), 新版让网络知道"当前位置主干特征是什么",
+    再结合地形决定该不该放大, 避免 DEM 噪声导致系统性假阳性。
+    """
+    def __init__(self, channels):
+        super().__init__()
+        self.gates = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(c * 2, c, 1, bias=False),
+                nn.BatchNorm2d(c),
+            ) for c in channels
+        ])
+
+    def forward(self, main_feats, terrain_feats):
+        out = []
+        for f, t, gate in zip(main_feats, terrain_feats, self.gates):
+            if t.shape[-2:] != f.shape[-2:]:
+                t = F.interpolate(t, size=f.shape[-2:], mode='bilinear', align_corners=False)
+            g = torch.sigmoid(gate(torch.cat([f, t], dim=1)))
+            out.append(f * g + f)
+        return out
+
+
 class CoordinateAttention(nn.Module):
     """坐标注意力模块 (Coordinate Attention)
 
@@ -1397,7 +1471,8 @@ class StripPooling(nn.Module):
 class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
     # Implementing only the object path
     def __init__(self, size="base", img_size=512, num_classes=1, in_channels=3, pretrained=True,
-                 use_strip_pooling=False, use_coord_attention=False):
+                 use_strip_pooling=False, use_coord_attention=False,
+                 use_dem_guided=False, terrain_channels=4):
         super(Swin_LCSRB_DeformablePSP_FPNPAN, self).__init__()
 
         # 初始化主干网络
@@ -1421,6 +1496,18 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
             self.sp2 = StripPooling(feature_channels[2])  # Stage 2 (16×16)
             self.sp3 = StripPooling(feature_channels[3])  # Stage 3 (16×16)
             print(f'[StripPooling] enabled on Stage 2 ({feature_channels[2]}ch) & Stage 3 ({feature_channels[3]}ch)')
+
+        # ===== DEM-guided Fusion =====
+        self.use_dem_guided = use_dem_guided
+        self.terrain_channels = terrain_channels
+        if use_dem_guided:
+            self.terrain_encoder = TerrainEncoder(
+                in_channels=terrain_channels,
+                channels=tuple(feature_channels),
+            )
+            self.terrain_fusion = TerrainGuidedFusion(feature_channels)
+            print(f'[DEM-guided] enabled, terrain_channels={terrain_channels}, '
+                  f'channels={feature_channels}')
 
         # 初始化可变形金字塔池化模块和 FPNPAN
         self.PPN = DeformablePSPModule(feature_channels[-1])
@@ -1453,8 +1540,15 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
     def forward(self, x):
         input_size = (x.size()[2], x.size()[3])  # 获取输入的高和宽
 
-        # 提取特征
+        # 提取主干特征 (使用全部输入通道)
         features = self.backbone.extra_features(x)
+
+        # DEM-guided fusion: 用地形通道生成门控信号, 调制主干特征
+        if self.use_dem_guided:
+            # 取后 terrain_channels 个通道作为地形输入 (DEM/Slope/TPI/Curv)
+            terrain_input = x[:, -self.terrain_channels:, :, :]
+            terrain_feats = self.terrain_encoder(terrain_input)
+            features = self.terrain_fusion(features, terrain_feats)
 
         # 注意力增强深层特征
         if self.use_coord_attention:
