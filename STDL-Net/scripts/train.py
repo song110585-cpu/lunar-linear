@@ -26,15 +26,18 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from PIL import Image
 
-# 确保能从 STDL-Net 根目录 import (兼容 scripts/ 和根目录两种运行方式)
+# 确保能从 STDL-Net 目录 import (兼容 scripts/ 和根目录两种运行方式)
+# 直接加子目录到 sys.path, 避免同名的 pip 包冲突 (如 datasets)
 import sys as _sys
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _root not in _sys.path:
-    _sys.path.insert(0, _root)
+for _sub in ['datasets', 'utils', 'models']:
+    _p = os.path.join(_root, _sub)
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
 
-from utils import metrics
-from datasets.MyDataset import MyDataset, CHANNEL_MEAN, CHANNEL_STD
-from models.swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
+import metrics
+from MyDataset import MyDataset, CHANNEL_MEAN, CHANNEL_STD
+from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -470,7 +473,7 @@ def train(hp: HyperParameter):
 
     # ---- Kaggle: 替换 swinv2unet 内置预训练路径 ----
     if hp.is_kaggle and hp.pretrain_dir:
-        from models import swinv2unet
+        import swinv2unet
         swinv2unet._SWIN_V2_PRETRAINED = {
             'tiny':  os.path.join(hp.pretrain_dir, 'swinv2_tiny_patch4_window16_256.pth'),
             'small': os.path.join(hp.pretrain_dir, 'swinv2_small_patch4_window16_256.pth'),

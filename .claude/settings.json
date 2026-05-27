@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python -c ' *)",
       "Bash(python -c \"import sys; sys.path.insert\\(0,'D:/pycharm/lunar-linear/STDL-Net'\\); from scripts.train import load_yaml_config; c=load_yaml_config\\('D:/pycharm/lunar-linear/STDL-Net/configs/R25.yaml'\\); print\\(f'OK - R25: model={c[\\\\\"model_size\\\\\"]}, focal={c[\\\\\"use_focal_loss\\\\\"]}, strip={c[\\\\\"use_strip_pooling\\\\\"]}, wd={c[\\\\\"weight_decay\\\\\"]}'\\)\")",
-      "Bash(python -c \"import py_compile; py_compile.compile\\('D:/pycharm/lunar-linear/STDL-Net/scripts/train.py', doraise=True\\); print\\('Syntax OK'\\)\")"
+      "Bash(python -c \"import py_compile; py_compile.compile\\('D:/pycharm/lunar-linear/STDL-Net/scripts/train.py', doraise=True\\); print\\('Syntax OK'\\)\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'D:/pycharm/lunar-linear/STDL-Net'\\); from scripts.train import load_yaml_config; c=load_yaml_config\\('D:/pycharm/lunar-linear/STDL-Net/configs/R25.yaml'\\); print\\('OK'\\)\")"
     ]
   }
 }
