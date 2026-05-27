@@ -1,15 +1,12 @@
 import os
 os.environ["WANDB_API_KEY"] = '3d0f14304695197a773e59b027afa3b3c4ca46e1'
 
-import wandb
-
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torchvision
-from torchvision import models
 from torch import optim
 import matplotlib.pyplot as plt
 import matplotlib

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import yaml; c=yaml.safe_load\\(open\\('D:/pycharm/lunar-linear/STDL-Net/configs/R25.yaml', encoding='utf-8'\\)\\); print\\('OK'\\); print\\('Keys:', sorted\\(c.keys\\(\\)\\)\\); print\\('Focal:', c.get\\('use_focal_loss'\\)\\); print\\('Strip:', c.get\\('use_strip_pooling'\\)\\); print\\('WD:', c.get\\('weight_decay'\\)\\)\")"
+    ]
+  }
+}
