@@ -65,6 +65,9 @@ def detect_env():
                     return p
             return None
 
+        train_split = _find_valid_list('valid_tiles_train_split.txt')
+        train_list = train_split if train_split else _find_valid_list('valid_tiles_train.txt')
+
         return {
             'is_kaggle': True,
             'train_image_dir': os.path.join(data_root, 'train', 'image'),
@@ -73,12 +76,15 @@ def detect_env():
             'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
             'pretrain_dir':    os.path.join(data_root, 'pretrain'),
             'record_path':     '/kaggle/working/result',
-            'train_valid_list': _find_valid_list('valid_tiles_train.txt'),
+            'train_valid_list': train_list,
+            'val_valid_list':   _find_valid_list('valid_tiles_val.txt'),
             'test_valid_list':  _find_valid_list('valid_tiles_test.txt'),
         }
     else:
         # ---- 本地环境 ----
         _filter_dir = r'E:\月球_dataset\Research area\dataset_analysis'
+        train_split = os.path.join(_filter_dir, 'valid_tiles_train_split.txt')
+        train_list = train_split if os.path.isfile(train_split) else os.path.join(_filter_dir, 'valid_tiles_train.txt')
         return {
             'is_kaggle': False,
             'train_image_dir': r'E:\月球_dataset\Research area\train\dataset_v5\image',
@@ -87,7 +93,8 @@ def detect_env():
             'test_mask_dir':   r'E:\月球_dataset\Research area\test\dataset_v5\mask',
             'pretrain_dir':    None,  # 使用 swinv2unet.py 内置路径
             'record_path':     r'E:\月球_dataset\Research area\result',
-            'train_valid_list': os.path.join(_filter_dir, 'valid_tiles_train.txt'),
+            'train_valid_list': train_list,
+            'val_valid_list':   os.path.join(_filter_dir, 'valid_tiles_val.txt'),
             'test_valid_list':  os.path.join(_filter_dir, 'valid_tiles_test.txt'),
         }
 
@@ -177,6 +184,7 @@ class HyperParameter:
 
         # ---- 数据过滤清单 (None 表示不过滤) ----
         self.train_valid_list = env['train_valid_list']
+        self.val_valid_list   = env.get('val_valid_list', None)
         self.test_valid_list  = env['test_valid_list']
 
         # ---- 输出路径 ----
@@ -428,12 +436,14 @@ def plot_training_curves(history, save_path, num_classes):
     ep = history['epoch']
 
     axes[0, 0].plot(ep, history['train_loss'], 'o-', ms=3, label='Train')
-    axes[0, 0].plot(ep, history['test_loss'],  's-', ms=3, label='Test')
+    if 'val_loss' in history:
+        axes[0, 0].plot(ep, history['val_loss'],  '^-', ms=3, label='Val')
     axes[0, 0].set_xlabel('Epoch'); axes[0, 0].set_ylabel('Loss')
     axes[0, 0].set_title('Loss Curve'); axes[0, 0].legend(); axes[0, 0].grid(True, alpha=0.3)
 
     axes[0, 1].plot(ep, history['train_miou'], 'o-', ms=3, label='Train')
-    axes[0, 1].plot(ep, history['test_miou'],  's-', ms=3, label='Test')
+    if 'val_miou' in history:
+        axes[0, 1].plot(ep, history['val_miou'],  '^-', ms=3, label='Val')
     axes[0, 1].set_xlabel('Epoch'); axes[0, 1].set_ylabel('mIoU')
     axes[0, 1].set_title('mIoU Curve'); axes[0, 1].legend(); axes[0, 1].grid(True, alpha=0.3)
 
@@ -444,12 +454,13 @@ def plot_training_curves(history, save_path, num_classes):
     axes[1, 0].set_xlabel('Epoch'); axes[1, 0].set_ylabel('IoU')
     axes[1, 0].set_title('Train Per-Class IoU'); axes[1, 0].legend(); axes[1, 0].grid(True, alpha=0.3)
 
-    arr = np.array(history['test_iou_per_class'])
-    for c in range(num_classes):
-        axes[1, 1].plot(ep, arr[:, c], 's-', ms=2, lw=1.5,
-                        color=CLASS_COLORS_PLT[c], label=CLASS_NAMES[c])
+    if 'val_iou_per_class' in history:
+        arr_val = np.array(history['val_iou_per_class'])
+        for c in range(num_classes):
+            axes[1, 1].plot(ep, arr_val[:, c], '^-', ms=2, lw=1.5,
+                            color=CLASS_COLORS_PLT[c], label=CLASS_NAMES[c])
     axes[1, 1].set_xlabel('Epoch'); axes[1, 1].set_ylabel('IoU')
-    axes[1, 1].set_title('Test Per-Class IoU'); axes[1, 1].legend(); axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].set_title('Val Per-Class IoU'); axes[1, 1].legend(); axes[1, 1].grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150)
@@ -523,6 +534,11 @@ def train(hp: HyperParameter):
         masks_dir=hp.train_mask_dir,
         valid_list_file=hp.train_valid_list,
     )
+    val_data = MyDataset(
+        images_dir=hp.train_image_dir,
+        masks_dir=hp.train_mask_dir,
+        valid_list_file=hp.val_valid_list,
+    )
     test_data = MyDataset(
         images_dir=hp.test_image_dir,
         masks_dir=hp.test_mask_dir,
@@ -546,11 +562,14 @@ def train(hp: HyperParameter):
     train_iter = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True,
                             num_workers=2 if use_cuda else 0,
                             pin_memory=use_cuda, drop_last=True)
+    val_iter   = DataLoader(val_data,   batch_size=1, shuffle=False,
+                            num_workers=2 if use_cuda else 0,
+                            pin_memory=use_cuda)
     test_iter  = DataLoader(test_data,  batch_size=1, shuffle=False,
                             num_workers=2 if use_cuda else 0,
                             pin_memory=use_cuda)
 
-    print(f'训练集: {len(train_data)} 张, 测试集: {len(test_data)} 张')
+    print(f'训练集: {len(train_data)} 张, 验证集: {len(val_data)} 张, 测试集: {len(test_data)} 张')
     print(f'训练 batches/epoch: {len(train_iter)}')
 
     # ---- 损失 ----
@@ -583,17 +602,18 @@ def train(hp: HyperParameter):
     history = {
         'epoch': [],
         'train_loss': [], 'train_miou': [], 'train_acc': [],
-        'test_loss':  [], 'test_miou':  [], 'test_acc':  [],
-        'train_iou_per_class': [], 'test_iou_per_class': [],
+        'val_loss':   [], 'val_miou':   [], 'val_acc':   [],
+        'train_iou_per_class': [], 'val_iou_per_class': [],
     }
 
     csv_path = os.path.join(hp.result_dir, 'epoch_metrics.csv')
     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        header = ['epoch', 'train_loss', 'test_loss', 'train_miou', 'test_miou',
-                  'train_acc', 'test_acc']
+        header = ['epoch', 'train_loss', 'val_loss', 
+                  'train_miou', 'val_miou',
+                  'train_acc', 'val_acc']
         for c in range(hp.num_classes):
-            header += [f'train_iou_{c}', f'test_iou_{c}']
+            header += [f'train_iou_{c}', f'val_iou_{c}']
         w.writerow(header)
 
     # ---- 训练循环 ----
@@ -646,65 +666,59 @@ def train(hp: HyperParameter):
 
         scheduler.step()
 
-        # --- Test ---
+        # --- Validation ---
         model.eval()
-        test_losses = []
-        test_hist = torch.zeros(hp.num_classes, hp.num_classes, dtype=torch.float64)
+        val_losses = []
+        val_hist = torch.zeros(hp.num_classes, hp.num_classes, dtype=torch.float64)
         with torch.no_grad(), amp_ctx:
-            for img, label, name in tqdm(test_iter, desc='Testing', unit='img'):
-                if hp.max_steps > 0 and len(test_losses) >= hp.max_steps:
+            for img, label, name in tqdm(val_iter, desc='Validating', unit='img'):
+                if hp.max_steps > 0 and len(val_losses) >= hp.max_steps:
                     break
                 img, label = img.to(device), label.to(device)
                 logits = model(img)
-                test_losses.append(loss_fn(logits, label).item())
+                val_losses.append(loss_fn(logits, label).item())
                 pred = logits.argmax(dim=1)
-                test_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
+                val_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
 
-        tm = metrics.metrics_from_hist(test_hist)
-        test_avg_loss = float(np.mean(test_losses))
-        print(f'[Test]  loss: {test_avg_loss:.4f}  mIoU: {tm["miou"]:.4f}  acc: {tm["accuracy"]:.4f}')
-        print('  IoU:', ' '.join(f'{v:.4f}' for v in tm['iou_per_class']))
+        vm = metrics.metrics_from_hist(val_hist)
+        val_avg_loss = float(np.mean(val_losses))
+        print(f'[Val]   loss: {val_avg_loss:.4f}  mIoU: {vm["miou"]:.4f}  acc: {vm["accuracy"]:.4f}')
+        print('  IoU:', ' '.join(f'{v:.4f}' for v in vm['iou_per_class']))
 
         # --- 记录 ----
         history['epoch'].append(epoch)
         history['train_loss'].append(avg_loss)
         history['train_miou'].append(float(m['miou']))
         history['train_acc'].append(float(m['accuracy']))
-        history['test_loss'].append(test_avg_loss)
-        history['test_miou'].append(float(tm['miou']))
-        history['test_acc'].append(float(tm['accuracy']))
+
+        history['val_loss'].append(val_avg_loss)
+        history['val_miou'].append(float(vm['miou']))
+        history['val_acc'].append(float(vm['accuracy']))
+
         history['train_iou_per_class'].append([float(v) for v in m['iou_per_class']])
-        history['test_iou_per_class'].append([float(v) for v in tm['iou_per_class']])
+        history['val_iou_per_class'].append([float(v) for v in vm['iou_per_class']])
 
         with open(csv_path, 'a', newline='', encoding='utf-8') as f:
-            row = [epoch, f'{avg_loss:.6f}', f'{test_avg_loss:.6f}',
-                   f'{float(m["miou"]):.6f}', f'{float(tm["miou"]):.6f}',
-                   f'{float(m["accuracy"]):.6f}', f'{float(tm["accuracy"]):.6f}']
+            row = [epoch, f'{avg_loss:.6f}', f'{val_avg_loss:.6f}',
+                   f'{float(m["miou"]):.6f}', f'{float(vm["miou"]):.6f}',
+                   f'{float(m["accuracy"]):.6f}', f'{float(vm["accuracy"]):.6f}']
             for c in range(hp.num_classes):
-                row += [f'{m["iou_per_class"][c]:.6f}', f'{tm["iou_per_class"][c]:.6f}']
+                row += [f'{m["iou_per_class"][c]:.6f}', f'{vm["iou_per_class"][c]:.6f}']
             csv.writer(f).writerow(row)
 
         with open(os.path.join(hp.result_dir, 'history.json'), 'w', encoding='utf-8') as f:
             json.dump(history, f, indent=2, ensure_ascii=False)
 
-        # --- 保存最优 ----
-        if tm['miou'] > best_miou:
-            best_miou = float(tm['miou'])
+        # --- 保存最优 (基于验证集 mIoU) ----
+        if vm['miou'] > best_miou:
+            best_miou = float(vm['miou'])
             no_improve_count = 0
             torch.save(model.state_dict(),
                        os.path.join(hp.result_dir, f'best_{hp.model_size}.pth'))
-            print(f'>>> Best model saved! mIoU={best_miou:.4f}')
-
-            if hp.save_all_test_on_best:
-                if best_export_dir and os.path.isdir(best_export_dir):
-                    shutil.rmtree(best_export_dir, ignore_errors=True)
-                best_export_dir = os.path.join(hp.result_dir,
-                    f'best_epoch_{epoch:02d}_miou_{best_miou:.4f}')
-                export_all_test(model, test_iter, best_export_dir, epoch,
-                                hp.num_classes, device, use_cuda=use_cuda)
+            print(f'>>> Best model saved on Val mIoU! val_mIoU={best_miou:.4f}')
         else:
             no_improve_count += 1
-            print(f'  No improvement ({no_improve_count}/{hp.patience})')
+            print(f'  No improvement on Val ({no_improve_count}/{hp.payout if hasattr(hp, "payout") else hp.patience})')
 
         # --- Checkpoint ----
         if epoch % 5 == 0:
@@ -720,13 +734,50 @@ def train(hp: HyperParameter):
         # --- Early stopping ---
         if hp.early_stop and no_improve_count >= hp.patience:
             print(f'\n*** Early stopping at epoch {epoch} '
-                  f'(no improvement for {hp.patience} epochs) ***')
+                  f'(no improvement on Val for {hp.patience} epochs) ***')
             break
 
     # ---- 保存最终模型 ----
     final_path = os.path.join(hp.result_dir, f'final_{hp.model_size}.pth')
     torch.save(model.state_dict(), final_path)
     print(f'Final model saved: {final_path}')
+
+    # ---- 最终在最优秀的模型上进行测试集评估 (严格闭卷测试) ----
+    print('\n========================================================================')
+    print('>>> 训练完成！正在加载最佳验证集权重，进行最终的测试集(Test Set)闭卷评估...')
+    print('========================================================================')
+    
+    best_path = os.path.join(hp.result_dir, f'best_{hp.model_size}.pth')
+    if os.path.exists(best_path):
+        model.load_state_dict(torch.load(best_path, map_location=device))
+        print(f'成功加载最佳验证权重: {best_path}')
+    else:
+        print(f'未找到最佳验证权重，将直接评估当前模型权重')
+        
+    model.eval()
+    test_losses = []
+    test_hist = torch.zeros(hp.num_classes, hp.num_classes, dtype=torch.float64)
+    with torch.no_grad(), amp_ctx:
+        for img, label, name in tqdm(test_iter, desc='Final Test Evaluation', unit='img'):
+            img, label = img.to(device), label.to(device)
+            logits = model(img)
+            test_losses.append(loss_fn(logits, label).item())
+            pred = logits.argmax(dim=1)
+            test_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
+
+    tm = metrics.metrics_from_hist(test_hist)
+    test_avg_loss = float(np.mean(test_losses))
+    print('\n======================= 最终测试集闭卷评估成绩 =======================')
+    print(f'[Final Test] loss: {test_avg_loss:.4f}  mIoU: {tm["miou"]:.4f}  acc: {tm["accuracy"]:.4f}')
+    print('  Per-Class IoU:')
+    for c in range(hp.num_classes):
+        print(f'    {CLASS_NAMES[c]:<15}: {tm["iou_per_class"][c]:.4f}')
+    print('======================================================================')
+    
+    # 导出最终预测图
+    if hp.save_all_test_on_best:
+        best_export_dir = os.path.join(hp.result_dir, f'final_test_eval_miou_{tm["miou"]:.4f}')
+        export_all_test(model, test_iter, best_export_dir, epoch, hp.num_classes, device, use_cuda=use_cuda)
 
     # ---- 训练曲线 ----
     plot_training_curves(history,
