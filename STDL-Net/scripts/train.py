@@ -49,9 +49,10 @@ def detect_env():
     """自动检测 Kaggle vs 本地环境, 返回路径配置和预训练目录."""
     if os.path.isdir('/kaggle'):
         # ---- Kaggle 环境 ----
-        data_root = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
+        # 优先使用最新的 datasetv6, 否则回退到 datasetv5
+        data_root = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
         # if not os.path.isdir(data_root):
-        #     data_root = '/kaggle/input/lunar-data-v2/datasetv5/dataset'
+        #     data_root = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
 
         # 自动查找 valid_tiles_*.txt: 优先 dataset 根目录, 然后逐级向上找
         def _find_valid_list(filename):
