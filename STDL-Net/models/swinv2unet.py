@@ -1,4 +1,5 @@
 from re import X
+import os
 import torch,timm
 import torch.nn as nn
 import torch.nn.functional as F
@@ -834,11 +835,49 @@ _SWIN_V2_CONFIGS = {
     'base':  dict(embed_dim=128, depths=[2, 2, 18, 2], num_heads=[4, 8, 16, 32], window_size=16),
 }
 
+# 预训练权重文件名 (不含路径)
 _SWIN_V2_PRETRAINED = {
-    'tiny':  r'E:\月球_dataset\Mss-Net\pretrain\swinv2_tiny_patch4_window16_256.pth',
-    'small': r'E:\月球_dataset\Mss-Net\pretrain\swinv2_small_patch4_window16_256.pth',
-    'base':  r'E:\月球_dataset\Mss-Net\pretrain\swinv2_base_patch4_window12to16_192to256_22kto1k_ft.pth',
+    'tiny':  'swinv2_tiny_patch4_window16_256.pth',
+    'small': 'swinv2_small_patch4_window16_256.pth',
+    'base':  'swinv2_base_patch4_window12to16_192to256_22kto1k_ft.pth',
 }
+
+
+def _find_pretrained(variant):
+    """自动查找预训练权重, 兼容本地 / Kaggle / 任意环境.
+    优先: 环境变量 SWIN_PRETRAIN_DIR > 脚本目录 > pretrain/ 子目录 > 递归搜索
+    """
+    fname = _SWIN_V2_PRETRAINED[variant]
+    search_dirs = [os.environ.get('SWIN_PRETRAIN_DIR', '')]
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    search_dirs += [
+        script_dir,
+        os.path.join(script_dir, 'pretrain'),
+        os.getcwd(),
+        os.path.join(os.getcwd(), 'pretrain'),
+        r'E:\月球_dataset\Mss-Net\pretrain',  # 本地默认
+        '/kaggle/input',  # Kaggle 典型挂载点
+    ]
+    for d in search_dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        # 直接查找
+        path = os.path.join(d, fname)
+        if os.path.isfile(path):
+            return path
+        # Kaggle: pretrain 通常在 dataset 的子目录里, 递归一层
+        try:
+            for sub in os.listdir(d):
+                path = os.path.join(d, sub, fname)
+                if os.path.isfile(path):
+                    return path
+        except PermissionError:
+            pass
+    raise FileNotFoundError(
+        f'找不到预训练权重: {fname}\n'
+        f'请设置环境变量 SWIN_PRETRAIN_DIR 指向包含 {fname} 的目录, '
+        f'或将文件放到脚本所在目录或 pretrain/ 子目录'
+    )
 
 def swin_v2_LCSRB(img_size=512, in_chans=3, size='base', **kwargs):
     # 解析模型规模
@@ -849,6 +888,9 @@ def swin_v2_LCSRB(img_size=512, in_chans=3, size='base', **kwargs):
             break
     cfg = _SWIN_V2_CONFIGS[variant]
     print(f'[swin_v2_LCSRB] using variant={variant}, embed_dim={cfg["embed_dim"]}, depths={cfg["depths"]}')
+
+    # 提前取出 pretrained 参数, 不传给 SwinTransformerV2_LCSRB
+    pretrained = kwargs.pop('pretrained', True)
 
     # 创建 Swin Transformer V2 LCSRB 模型实例
     model = SwinTransformerV2_LCSRB(
@@ -861,10 +903,13 @@ def swin_v2_LCSRB(img_size=512, in_chans=3, size='base', **kwargs):
         **kwargs
     )
     # 加载预训练的权重
-    pretrained_path = _SWIN_V2_PRETRAINED[variant]
-    checkpoint = torch.load(pretrained_path, map_location='cpu')
-    if "model" in checkpoint:
-        checkpoint = checkpoint["model"]
+    if pretrained:
+        pretrained_path = _find_pretrained(variant)
+        checkpoint = torch.load(pretrained_path, map_location='cpu')
+        if "model" in checkpoint:
+            checkpoint = checkpoint["model"]
+    else:
+        checkpoint = {}
 
     # ===== 将 3 通道的 patch_embed.proj.weight 扩展到 in_chans 通道 =====
     pe_key = 'patch_embed.proj.weight'
@@ -1476,7 +1521,7 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
         super(Swin_LCSRB_DeformablePSP_FPNPAN, self).__init__()
 
         # 初始化主干网络
-        self.backbone = swin_v2_LCSRB(size=size, img_size=img_size, in_chans=in_channels)
+        self.backbone = swin_v2_LCSRB(size=size, img_size=img_size, in_chans=in_channels, pretrained=pretrained)
         # 根据模型大小设置特征通道数
         variant = size.lower()
         if 'base' in variant:

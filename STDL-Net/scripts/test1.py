@@ -15,19 +15,19 @@ from PIL import Image
 
 #   只需要改这里！把路径改成你下载的 result 文件夹
 
-RESULT_DIR = r"E:\月球_dataset\baseline模型结果\result20"  # R13结果
+RESULT_DIR = r"E:\月球_dataset\baseline模型结果\result26"  # R13结果
 
 # 测试集 GT mask 目录 (一般不用改, 自动搜索)
-TEST_MASK_DIR = r"E:\月球_dataset\Research area\test\dataset_v5\mask"
+TEST_MASK_DIR = r"E:\月球_dataset\Research area\test\dataset_v6\mask"
 
 # 测试集影像目录 (可选, 用于显示 WAC/DEM/Slope)
-TEST_IMG_DIR = r"E:\月球_dataset\Research area\test\dataset_v5\image"
+TEST_IMG_DIR = r"E:\月球_dataset\Research area\test\dataset_v6\image"
 
 # ========== TTA 配置 ==========
 TTA_ENABLED = True                # 设为 True 启用 TTA 推理
-MODEL_PATH = r"E:\月球_dataset\baseline模型结果\result20\result\result\best_small.pth"   # best_small.pth 路径
+MODEL_PATH = r"E:\月球_dataset\baseline模型结果\result26\result\result\best_small.pth"   # best_small.pth 路径
 MODEL_SIZE = 'small'
-USE_STRIP_POOLING = True           # R19 模型=True; R17/R18 baseline 模型=False
+USE_STRIP_POOLING = False         # R19 模型=True; R17/R18 baseline 模型=False
 TTA_OUTPUT_DIR = ''                # 留空则自动设为 RESULT_DIR/tta_pred_mask
 
 # ========== 配置 ==========
@@ -392,8 +392,12 @@ def tta_inference(model_path, model_size, test_img_dir, output_dir):
     import sys
     # 确保能 import 模型代码
     code_dir = os.path.dirname(os.path.abspath(__file__))
-    if code_dir not in sys.path:
-        sys.path.insert(0, code_dir)
+    project_dir = os.path.dirname(code_dir)
+    for p in [code_dir, project_dir,
+              os.path.join(project_dir, 'models'),
+              os.path.join(project_dir, 'datasets')]:
+        if p not in sys.path:
+            sys.path.insert(0, p)
     from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
     from MyDataset import MyDataset
     from torch.utils.data import DataLoader

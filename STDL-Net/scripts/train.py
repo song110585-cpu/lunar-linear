@@ -57,6 +57,7 @@ def detect_env():
         def _find_valid_list(filename):
             candidates = [
                 os.path.join(data_root, filename),
+                os.path.join(data_root, 'pretrain', filename),
                 os.path.join(os.path.dirname(data_root), filename),
                 os.path.join(os.path.dirname(os.path.dirname(data_root)), filename),
             ]

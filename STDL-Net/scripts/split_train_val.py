@@ -22,7 +22,7 @@ from collections import defaultdict
 # ============================================================================
 # 配置
 # ============================================================================
-MASK_DIR = r'E:\月球_dataset\Research area\train\dataset_v5\mask'
+MASK_DIR = r'E:\月球_dataset\Research area\train\dataset_v6\mask'
 FILTER_DIR = r'E:\月球_dataset\Research area\dataset_analysis'
 VALID_TRAIN_FILE = os.path.join(FILTER_DIR, 'valid_tiles_train.txt')
 
@@ -54,16 +54,52 @@ def main():
         tiles = sorted(f for f in os.listdir(MASK_DIR) if f.lower().endswith(('.tif', '.tiff')))
         print(f"扫描到共 {len(tiles)} 张切片")
 
-    # 3. 统计每个切片的类别属性
+    # 3. 预扫描 mask 目录，建立文件名集合 (快速查找，避免反复 os.path.exists)
+    print("正在扫描 mask 目录...")
+    mask_files = set()
+    for f in os.listdir(MASK_DIR):
+        if f.lower().endswith(('.tif', '.tiff')):
+            mask_files.add(f)
+    print(f"[Info] mask 目录共 {len(mask_files)} 个文件")
+
+    # 统计每个切片的类别属性
     print("正在分析切片 mask 类别属性，以进行精确分层...")
     tile_to_class = {}
     class_to_tiles = defaultdict(list)
-    
+    missing_count = 0
+
     for i, fname in enumerate(tiles):
-        mask_path = os.path.join(MASK_DIR, fname)
-        if not os.path.exists(mask_path):
-            print(f"❌ 警告: 找不到 mask 文件 {mask_path}")
+        # 生成候选 mask 文件名, 覆盖三种实际命名差异:
+        #   Aristarchus_5ch_r000  → mask: train_Aristarchus_r000
+        #   Mare Serenitatis_5ch  → mask: train_Mare Serenitatis_r000
+        #   Marius Hills_5ch_r000 → mask: Marius Hills_5ch_r000 (同名)
+        candidates = [fname]
+        # _5ch 在文件名中 => 也试去掉 _5ch, 以及加 train_ / test_ 前缀
+        for tag in ("_5ch", "_3ch", "_2ch"):
+            if tag in fname:
+                no_tag = fname.replace(tag, "")
+                candidates.append(no_tag)
+                # 抽取纯区域名: "Aristarchus_5ch_r000_c000.tif" -> "train_Aristarchus_r000_c000.tif"
+                parts = fname.split(tag, 1)
+                region = parts[0]                     # "Aristarchus"
+                suffix = parts[1]                     # "_r000_c000.tif"
+                for prefix in ("train_", "test_", ""):
+                    candidates.append(f"{prefix}{region}{suffix}")
+                break  # 只处理第一个匹配的 tag
+
+        mask_name = None
+        for cand in candidates:
+            if cand in mask_files:
+                mask_name = cand
+                break
+
+        if mask_name is None:
+            missing_count += 1
+            if missing_count <= 10:
+                print(f"[Warning] 找不到 mask 文件: {fname}")
             continue
+
+        mask_path = os.path.join(MASK_DIR, mask_name)
             
         with rasterio.open(mask_path) as src:
             mask = src.read(1).astype(np.int64)
@@ -87,6 +123,10 @@ def main():
         
         if (i + 1) % 200 == 0 or (i + 1) == len(tiles):
             print(f"  已分析 [{i+1}/{len(tiles)}]...")
+
+    if missing_count > 0:
+        print(f"\n[Info] 共 {missing_count} 张切片在 mask 目录中找不到，已跳过")
+        print(f"[Info] 实际参与划分: {len(tile_to_class)} 张")
 
     print("\n=== 原始类别分布统计 ===")
     for c in range(NUM_CLASSES):
