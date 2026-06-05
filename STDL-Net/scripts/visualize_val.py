@@ -94,13 +94,20 @@ def compute_metrics(pred_dir, gt_dir):
             minlength=NUM_CLASSES ** 2
         ).reshape(NUM_CLASSES, NUM_CLASSES)
 
-        # 单图 mIoU
+        # 单图 mIoU (仅计算图像中实际存在或被预测出的类别，消除全0类别拉低平均值的统计偏置)
         h = np.bincount(
             gt[valid] * NUM_CLASSES + pred[valid],
             minlength=NUM_CLASSES ** 2
         ).reshape(NUM_CLASSES, NUM_CLASSES)
         iou = np.diag(h) / (h.sum(0) + h.sum(1) - np.diag(h) + 1e-10)
-        per_image.append(float(np.mean(iou)))
+        
+        # 找出该图实际存在真值或被预测出的类别
+        present_classes = (h.sum(0) > 0) | (h.sum(1) > 0)
+        if present_classes.sum() > 0:
+            per_image_mean = float(np.mean(iou[present_classes]))
+        else:
+            per_image_mean = 0.0
+        per_image.append(per_image_mean)
         names.append(fname.replace('.png', ''))
 
     # 全局指标
