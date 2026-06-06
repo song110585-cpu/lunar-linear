@@ -274,7 +274,7 @@ class AugmentedDataset(torch.utils.data.Dataset):
         if self.copypaste:
             self.rare_indices = []
             print('CopyPaste: 预索引少数类样本...')
-            for i in range(len(self.base)):
+            for i in tqdm(range(len(self.base)), desc='CopyPaste索引', unit='img'):
                 _, mask, _ = self.base[i]
                 classes_present = set(mask.unique().tolist())
                 if 3 in classes_present or 4 in classes_present:
@@ -744,42 +744,45 @@ def train(hp: HyperParameter):
     torch.save(model.state_dict(), final_path)
     print(f'Final model saved: {final_path}')
 
-    # ---- 最终在最优秀的模型上进行测试集评估 (严格闭卷测试) ----
-    print('\n========================================================================')
-    print('>>> 训练完成！正在加载最佳验证集权重，进行最终的测试集(Test Set)闭卷评估...')
-    print('========================================================================')
-    
-    best_path = os.path.join(hp.result_dir, f'best_{hp.model_size}.pth')
-    if os.path.exists(best_path):
-        model.load_state_dict(torch.load(best_path, map_location=device))
-        print(f'成功加载最佳验证权重: {best_path}')
-    else:
-        print(f'未找到最佳验证权重，将直接评估当前模型权重')
-        
-    model.eval()
-    test_losses = []
-    test_hist = torch.zeros(hp.num_classes, hp.num_classes, dtype=torch.float64)
-    with torch.no_grad(), amp_ctx:
-        for img, label, name in tqdm(test_iter, desc='Final Test Evaluation', unit='img'):
-            img, label = img.to(device), label.to(device)
-            logits = model(img)
-            test_losses.append(loss_fn(logits, label).item())
-            pred = logits.argmax(dim=1)
-            test_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
+    # ---- 最终在测试集上进行闭卷评估 (如果有测试集) ----
+    if len(test_data) > 0:
+        print('\n========================================================================')
+        print('>>> 训练完成！正在加载最佳验证集权重，进行最终的测试集(Test Set)闭卷评估...')
+        print('========================================================================')
 
-    tm = metrics.metrics_from_hist(test_hist)
-    test_avg_loss = float(np.mean(test_losses))
-    print('\n======================= 最终测试集闭卷评估成绩 =======================')
-    print(f'[Final Test] loss: {test_avg_loss:.4f}  mIoU: {tm["miou"]:.4f}  acc: {tm["accuracy"]:.4f}')
-    print('  Per-Class IoU:')
-    for c in range(hp.num_classes):
-        print(f'    {CLASS_NAMES[c]:<15}: {tm["iou_per_class"][c]:.4f}')
-    print('======================================================================')
-    
-    # 导出最终预测图
-    if hp.save_all_test_on_best:
-        best_export_dir = os.path.join(hp.result_dir, f'final_test_eval_miou_{tm["miou"]:.4f}')
-        export_all_test(model, test_iter, best_export_dir, epoch, hp.num_classes, device, use_cuda=use_cuda)
+        best_path = os.path.join(hp.result_dir, f'best_{hp.model_size}.pth')
+        if os.path.exists(best_path):
+            model.load_state_dict(torch.load(best_path, map_location=device))
+            print(f'成功加载最佳验证权重: {best_path}')
+        else:
+            print(f'未找到最佳验证权重，将直接评估当前模型权重')
+
+        model.eval()
+        test_losses = []
+        test_hist = torch.zeros(hp.num_classes, hp.num_classes, dtype=torch.float64)
+        with torch.no_grad(), amp_ctx:
+            for img, label, name in tqdm(test_iter, desc='Final Test Evaluation', unit='img'):
+                img, label = img.to(device), label.to(device)
+                logits = model(img)
+                test_losses.append(loss_fn(logits, label).item())
+                pred = logits.argmax(dim=1)
+                test_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
+
+        tm = metrics.metrics_from_hist(test_hist)
+        test_avg_loss = float(np.mean(test_losses))
+        print('\n======================= 最终测试集闭卷评估成绩 =======================')
+        print(f'[Final Test] loss: {test_avg_loss:.4f}  mIoU: {tm["miou"]:.4f}  acc: {tm["accuracy"]:.4f}')
+        print('  Per-Class IoU:')
+        for c in range(hp.num_classes):
+            print(f'    {CLASS_NAMES[c]:<15}: {tm["iou_per_class"][c]:.4f}')
+        print('======================================================================')
+
+        # 导出最终预测图
+        if hp.save_all_test_on_best:
+            best_export_dir = os.path.join(hp.result_dir, f'final_test_eval_miou_{tm["miou"]:.4f}')
+            export_all_test(model, test_iter, best_export_dir, epoch, hp.num_classes, device, use_cuda=use_cuda)
+    else:
+        print(f'\n[跳过] 测试集为空 (valid_tiles_test.txt 无匹配), 跳过最终闭卷评估')
 
     # ---- 训练曲线 ----
     plot_training_curves(history,
