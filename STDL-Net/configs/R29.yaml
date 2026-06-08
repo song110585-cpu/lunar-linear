@@ -1,5 +1,5 @@
-# R28: Dataset v6 + R26 Baseline + Boundary Supervision
-# 用法: python scripts/train.py --config configs/R28.yaml
+# R29: R26 Baseline + Light Boundary Supervision
+# 用法: python scripts/train.py --config configs/R29.yaml
 
 # ---- 核心参数 ----
 num_classes: 5
@@ -21,16 +21,16 @@ grad_clip_norm: 0           # 不裁剪
 use_augment: true
 use_copypaste: true
 copypaste_p: 0.5
-use_strip_pooling: false    # 恢复 R26 基线
+use_strip_pooling: false    # 保持 R26 纯净基线
 use_coord_attention: false
 use_boundary_loss: true
-boundary_loss_weight: 1.0
+boundary_loss_weight: 0.3   # 降低边界监督权重，先评估稳定性
 boundary_kernel_size: 3
-use_dem_guided: false       # 继续关闭 DEM 融合
+use_dem_guided: false
 terrain_channels: 4
 
 # ---- 损失函数 ----
-use_focal_loss: false        # CE + Dice + 边界
+use_focal_loss: false        # CE + 0.5 Dice + Boundary
 
 # ---- 数据增强 ----
 use_scale_aug: false
