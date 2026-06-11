@@ -4,7 +4,7 @@
 
 使用方法:
     1. 修改下面 RESULT_DIR 为你的本地结果文件夹路径 (如 E:\\月球_dataset\\baseline模型结果\\result26)
-    2. 直接运行本脚本: python visualize_val.py
+    2. 直接运行本脚本: python val.py
     3. 输出图表将保存在 RESULT_DIR/visualization_val/ 下
 """
 import os
@@ -16,7 +16,7 @@ from PIL import Image
 
 # ==================== 路径配置 ====================
 # [TODO] 只需要改这里！把路径改成你下载的结果文件夹
-RESULT_DIR = r"E:\月球_dataset\baseline模型结果\result28"
+RESULT_DIR = r"E:\月球_dataset\baseline模型结果\result29"
 
 # 验证集来源自 train 目录，所以 GT 和影像使用 train 目录
 VAL_MASK_DIR = r"E:\月球_dataset\Research area\train\dataset_v6\mask"

@@ -150,6 +150,7 @@ class HyperParameter:
         self.copypaste_p        = config.get('copypaste_p', 0.5)
         self.use_strip_pooling  = config.get('use_strip_pooling', False)
         self.use_coord_attention = config.get('use_coord_attention', False)
+        self.use_local_cnn      = config.get('use_local_cnn', False)
         self.use_boundary_loss  = config.get('use_boundary_loss', False)
         self.use_dem_guided     = config.get('use_dem_guided', True)
         self.terrain_channels   = config.get('terrain_channels', 4)
@@ -172,6 +173,7 @@ class HyperParameter:
 
         # ---- 导出开关 ----
         self.save_all_test_on_best = config.get('save_all_test_on_best', True)
+        self.save_val_on_best     = config.get('save_val_on_best', False)
         self.save_pred_mask_png    = config.get('save_pred_mask_png', True)
         self.save_pred_vis_png     = config.get('save_pred_vis_png', True)
 
@@ -508,6 +510,8 @@ def train(hp: HyperParameter):
         model_kwargs['use_strip_pooling'] = True
     if 'use_coord_attention' in init_params and hp.use_coord_attention:
         model_kwargs['use_coord_attention'] = True
+    if 'use_local_cnn' in init_params and hp.use_local_cnn:
+        model_kwargs['use_local_cnn'] = True
     if 'use_dem_guided' in init_params and hp.use_dem_guided:
         model_kwargs['use_dem_guided'] = True
         model_kwargs['terrain_channels'] = hp.terrain_channels
@@ -718,6 +722,12 @@ def train(hp: HyperParameter):
             torch.save(model.state_dict(),
                        os.path.join(hp.result_dir, f'best_{hp.model_size}.pth'))
             print(f'>>> Best model saved on Val mIoU! val_mIoU={best_miou:.4f}')
+
+            # 导出验证集预测图 (如果开启)
+            if hp.save_val_on_best:
+                val_export_dir = os.path.join(hp.result_dir,
+                    f'best_epoch_{epoch:02d}_val_miou_{best_miou:.4f}')
+                export_all_test(model, val_iter, val_export_dir, epoch, hp.num_classes, device, use_cuda=use_cuda)
         else:
             no_improve_count += 1
             print(f'  No improvement on Val ({no_improve_count}/{hp.payout if hasattr(hp, "payout") else hp.patience})')
@@ -834,6 +844,7 @@ if __name__ == '__main__':
     print(f'Loss: {loss_name} + 0.5*Dice, wd={hp.weight_decay}, clip={clip_str}')
     print(f'Aug: {hp.use_augment}, Scale: {hp.use_scale_aug} ({hp.scale_range}), CopyPaste: {hp.use_copypaste} (p={hp.copypaste_p})')
     print(f'Modules: StripPool={hp.use_strip_pooling}, CoordAttn={hp.use_coord_attention}, '
+          f'LocalCNN={hp.use_local_cnn}, '
           f'BoundaryLoss={hp.use_boundary_loss}, DEM-Guided={hp.use_dem_guided} '
           f'(terrain={hp.terrain_channels})')
     print(f'EarlyStop: {hp.early_stop} (patience={hp.patience})')

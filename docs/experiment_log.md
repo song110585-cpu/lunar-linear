@@ -297,3 +297,85 @@ Dataset v6 + R17 Baseline + **Strip Pooling
 - 在 Swin-LCSRB 主干中启用长条形池化，强迫模型沿构造延伸方向建立长距离依赖，锁定狭窄的线状构造。
 - 期待解决 R26 中 20% 构造边缘被划分为背景的漏检痛点。
 
+---
+
+# R28 new baseline+boundary
+
+## 改动
+
+Dataset v6 + R17 Baseline + Boundary Loss
+
+## 结果
+
+效果不佳，与 R27 类似。
+
+---
+
+# R29: R26 Baseline + Light Boundary Supervision
+
+## 改动
+
+Dataset v6 + R17 Baseline + Boundary Loss (light weight=0.3)
+
+- `boundary_loss_weight: 0.3`
+- `boundary_kernel_size: 3`
+
+## 结果
+
+Fault Precision: 38.6% (R26: 37.7%)，提升微乎其微。
+
+BG→Fault 误检仍占 61.3%。
+
+## 结论
+
+Boundary Loss 对 Fault 的 Precision 几乎无帮助。Fault 被误分为背景的问题不是边界不清晰，而是背景纹理和断层形态过于相似。
+
+---
+
+# R30 Local CNN 双分支
+
+## 改动
+
+在 SwinV2 Stage 2 (H/8) 和 Stage 3 (H/16) 引入 **Local CNN 并行分支**：
+
+```
+Stage 2/3 的 Swin Transformer 输出
+  ├── Transformer 分支 (全局语义, 保持不变)
+  ├── LocalCNN 分支: 3×3Conv×2 + BN + ReLU (局部细线细节保留)
+  └── Concat(Transformer, LocalCNN) → 1×1Conv → 融合
+```
+
+### 设计原理
+
+| 决策 | 理由 |
+|---|---|
+| 用 3×3 Conv 而非 DWConv | 极细线需要跨通道空间协同，DWConv 逐通道独立会丢失关联信号 |
+| Concat 融合而非 Add | 两条路径信号独立，让网络自行学习融合权重 |
+| 只加 Stage 2/3 | Stage 4 分辨率太低 (H/32)，细线结构已丢失 |
+| Stage 级并行 (非 Block 级) | 不干扰每个 Swin block 内部的 attention 计算 |
+| 独立 if 分支 (非 if/elif) | 可与 Strip Pooling 或其他模块叠加 |
+
+### 参数量
+
+- Stage 2 (384ch): 3x3 Conv ×2 + 1x1 Fuse ≈ 1.2M
+- Stage 3 (768ch): 3x3 Conv ×2 + 1x1 Fuse ≈ 4.7M
+- 总计 ≈ **+5.9M** (约 +8% vs 73M baseline)
+
+### 预期效果
+
+- 保留极细线（月溪）和断层（Fault）的局部几何细节
+- 减少 Fault→Background 的漏检（R26 中 Fault 的 FN 约 20%）
+- 不破坏 Transformer 的全局语义理解
+
+### 配置
+
+```yaml
+use_local_cnn: true   # configs/R30.yaml
+```
+
+### 训练命令
+
+```bash
+python scripts/train.py --config configs/R30.yaml
+```
+

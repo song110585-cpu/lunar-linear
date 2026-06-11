@@ -1513,10 +1513,47 @@ class StripPooling(nn.Module):
         return x * att + x
 
 
+class LocalCNNBranch(nn.Module):
+    """Local CNN 双分支 — 保留极细线局部空间细节
+
+    Stage 级并行: Transformer (全局语义) + 3x3 Conv×2 (局部细节) → Concat+1x1 融合
+
+    设计原则:
+      - 用普通 3x3 Conv 而非 DWConv: 极细线需要跨通道空间协同
+      - Concat 融合而非 Add: 保留两条路径的独立信号, 让网络自行学习融合权重
+      - 只在 Stage2/3 使用: 分辨率尚可 (H/8, H/16), 细线结构未完全丢失
+    """
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+        )
+        # 融合层: Concat(Transformer, LocalCNN) → 1x1 Conv 回原通道数
+        self.fuse = nn.Sequential(
+            nn.Conv2d(channels * 2, channels, 1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        # x: Swin Transformer 特征图 (B, C, H, W)
+        local = self.conv2(self.conv1(x))       # 3x3 Conv 提取局部细线细节
+        fused = self.fuse(torch.cat([x, local], dim=1))  # Concat 融合
+        return fused
+
+
 class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
     # Implementing only the object path
     def __init__(self, size="base", img_size=512, num_classes=1, in_channels=3, pretrained=True,
                  use_strip_pooling=False, use_coord_attention=False,
+                 use_local_cnn=False,
                  use_dem_guided=False, terrain_channels=4):
         super(Swin_LCSRB_DeformablePSP_FPNPAN, self).__init__()
 
@@ -1538,9 +1575,16 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
             self.ca3 = CoordinateAttention(feature_channels[3])  # Stage 3
             print(f'[CoordAttention] enabled on Stage 2 ({feature_channels[2]}ch) & Stage 3 ({feature_channels[3]}ch)')
         elif use_strip_pooling:
-            self.sp2 = StripPooling(feature_channels[2])  # Stage 2 (16×16)
-            self.sp3 = StripPooling(feature_channels[3])  # Stage 3 (16×16)
+            self.sp2 = StripPooling(feature_channels[2])  # Stage 2
+            self.sp3 = StripPooling(feature_channels[3])  # Stage 3
             print(f'[StripPooling] enabled on Stage 2 ({feature_channels[2]}ch) & Stage 3 ({feature_channels[3]}ch)')
+
+        # ===== Local CNN 双分支 (Stage 级并行的局部细节分支) =====
+        self.use_local_cnn = use_local_cnn
+        if use_local_cnn:
+            self.lc2 = LocalCNNBranch(feature_channels[2])  # Stage 2
+            self.lc3 = LocalCNNBranch(feature_channels[3])  # Stage 3
+            print(f'[LocalCNN] enabled on Stage 2 ({feature_channels[2]}ch) & Stage 3 ({feature_channels[3]}ch)')
 
         # ===== DEM-guided Fusion =====
         self.use_dem_guided = use_dem_guided
@@ -1602,6 +1646,11 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
         elif self.use_strip_pooling:
             features[2] = self.sp2(features[2])  # Stage 2
             features[3] = self.sp3(features[3])  # Stage 3
+
+        # Local CNN 双分支: 与 Transformer 并行, 保留极细线局部细节
+        if self.use_local_cnn:
+            features[2] = self.lc2(features[2])  # Stage 2 (H/8, 细线特征丰富)
+            features[3] = self.lc3(features[3])  # Stage 3 (H/16, 中等尺度)
 
         features[-1] = self.PPN(features[-1])  # 使用可变形 PPM 处理最后一层特征
         features = self.FPNPAN(features)  # 使用 FPNPAN 处理特征
