@@ -1,6 +1,6 @@
 """
 用 best_small.pth 对验证集做推理，生成 pred_mask PNG。
-用法: python scripts/export_val.py E:\月球_dataset\baseline模型结果\result29
+用法: python STDL-Net/scripts/export_val.py E:\月球_dataset\baseline模型结果\result30
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,7 +33,7 @@ def main():
     best_pth = None
     history_path = None
     for root, dirs, files in os.walk(args.result_dir):
-        if 'best_small.pth' in files and '_result_' in root:
+        if 'best_small.pth' in files:
             best_pth = os.path.join(root, 'best_small.pth')
             history_path = os.path.join(root, 'history.json')
             break
@@ -61,10 +61,16 @@ def main():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f'Device: {device}')
 
+    # Auto-detect: 从 state_dict 键判断模块配置
+    state = torch.load(best_pth, map_location='cpu')
+    has_local_cnn = any(k.startswith('lc2.') for k in state.keys())
+    has_strip_pooling = any(k.startswith('sp2.') for k in state.keys())
+    print(f'  Detected: LocalCNN={has_local_cnn}, StripPooling={has_strip_pooling}')
+
     model = Swin_LCSRB_DeformablePSP_FPNPAN(
         size='small', num_classes=5, in_channels=5, pretrained=False,
-        use_dem_guided=False, use_strip_pooling=False, use_coord_attention=False)
-    state = torch.load(best_pth, map_location=device)
+        use_dem_guided=False, use_strip_pooling=has_strip_pooling, use_coord_attention=False,
+        use_local_cnn=has_local_cnn)
     state = {k: v for k, v in state.items() if not k.startswith(('sp2.', 'sp3.'))}
     model.load_state_dict(state, strict=False)
     model = model.to(device)
