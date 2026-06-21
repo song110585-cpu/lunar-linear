@@ -15,7 +15,6 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from PIL import Image
-
 from MyDataset import MyDataset
 from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 
@@ -29,17 +28,25 @@ def main():
     parser.add_argument('result_dir', help='结果目录路径')
     args = parser.parse_args()
 
-    # 找 best_small.pth 和 history.json
+    # 找 best_*.pth 和 history.json
     best_pth = None
     history_path = None
     for root, dirs, files in os.walk(args.result_dir):
-        if 'best_small.pth' in files:
-            best_pth = os.path.join(root, 'best_small.pth')
+        pth_files = sorted([f for f in files if f.startswith('best_') and f.endswith('.pth')])
+        if pth_files:
+            best_pth = os.path.join(root, pth_files[0])
             history_path = os.path.join(root, 'history.json')
+            # 自动检测 model_size
+            model_size = pth_files[0].replace('best_', '').replace('.pth', '')
+            print(f'  Found: {pth_files[0]} (model_size={model_size})')
             break
 
     if not best_pth:
-        print(f'ERROR: 找不到 best_small.pth')
+        print(f'ERROR: 找不到 best_*.pth')
+        return
+
+    if not best_pth:
+        print(f'ERROR: 找不到 best_base.pth')
         return
 
     # 读取 best epoch
@@ -68,7 +75,7 @@ def main():
     print(f'  Detected: LocalCNN={has_local_cnn}, StripPooling={has_strip_pooling}')
 
     model = Swin_LCSRB_DeformablePSP_FPNPAN(
-        size='small', num_classes=5, in_channels=5, pretrained=False,
+        size=model_size, num_classes=5, in_channels=5, pretrained=False,
         use_dem_guided=False, use_strip_pooling=has_strip_pooling, use_coord_attention=False,
         use_local_cnn=has_local_cnn)
     state = {k: v for k, v in state.items() if not k.startswith(('sp2.', 'sp3.'))}

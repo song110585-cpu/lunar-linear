@@ -379,3 +379,74 @@ use_local_cnn: true   # configs/R30.yaml
 python scripts/train.py --config configs/R30.yaml
 ```
 
+---
+
+# R31 Weighted Tile Sampling
+
+## 改动
+
+Dataset v6 + R17 Baseline + **Weighted Tile Sampling** + **Base Model**
+
+- 按前景占比 `sqrt(fg_ratio) + 0.01` 加权采样
+- 高前景 tile 更频繁出现，缓解 96% 背景主导问题
+- 从 small 升级到 base 模型
+
+## 结果 (Val, 107 tiles)
+
+| Class | IoU | Prec | Recall | F1 |
+|---|---|---|---|---|
+| Background | 0.9725 | 0.9910 | 0.9811 | 0.9860 |
+| Wrinkle Ridge | 0.5236 | 0.5951 | 0.8132 | 0.6873 |
+| Rille | 0.5422 | 0.6697 | 0.7400 | 0.7031 |
+| **Fault** | **0.3713** | **0.4029** | **0.8257** | **0.5416** |
+| Graben | 0.6110 | 0.7480 | 0.7694 | 0.7586 |
+
+OA = 0.9731, mIoU = 0.6041
+
+## 结论
+
+- Base 模型 + 加权采样达到当前最优 mIoU (0.6041)
+- Wrinkle/Rille 提升明显 (Recall 81%/74%)
+- Fault 仍存在 Precision 低的问题 (40.3%)
+
+---
+
+# R32 Fault GT Dilation + FP Penalty
+
+## 改动
+
+R31 Base + **Fault GT 膨胀 (边界宽容) + 假阳性惩罚 (噪点抑制)**
+
+### 两个新 Loss 组件
+
+**1. Fault GT Dilation (Dice Loss 内)**
+```
+Fault GT → max_pool2d(kernel=3) 膨胀 1px → Dice 计算
+```
+模型预测偏 1-2px 仍然算"命中"，不惩罚。针对 Fault 宽度 1-2px 极细问题。
+
+**2. Fault FP Penalty**
+```
+penalty = mean( (1 - dilated_gt) * fault_prob )
+```
+膨胀后的 Fault GT 区域外，所有 Fault 预测概率直接惩罚。打击背景纹理中随机产生的假阳性噪点。
+
+### 配置
+
+```yaml
+use_fault_penalty: true
+fault_dilate: 1           # GT 膨胀半径 (3x3 kernel)
+fault_fp_weight: 0.1      # 假阳性惩罚权重
+```
+
+### 预期效果
+
+- Fault Precision 从 40% → 45%+
+- Fault IoU 从 0.37 → 0.40+
+
+### 训练命令
+
+```bash
+python scripts/train.py --config configs/R32.yaml
+```
+

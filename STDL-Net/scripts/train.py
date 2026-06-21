@@ -156,8 +156,11 @@ class HyperParameter:
         self.terrain_channels   = config.get('terrain_channels', 4)
 
         # ---- 损失函数 ----
-        self.use_focal_loss = config.get('use_focal_loss', False)
-        self.focal_gamma    = config.get('focal_gamma', 2.0)
+        self.use_focal_loss   = config.get('use_focal_loss', False)
+        self.focal_gamma      = config.get('focal_gamma', 2.0)
+        self.use_fault_penalty = config.get('use_fault_penalty', False)
+        self.fault_dilate      = config.get('fault_dilate', 1)
+        self.fault_fp_weight   = config.get('fault_fp_weight', 0.1)
 
         # ---- 优化器正则 ----
         self.weight_decay   = config.get('weight_decay', 0.01)
@@ -166,6 +169,9 @@ class HyperParameter:
         # ---- 数据增强 ----
         self.use_scale_aug = config.get('use_scale_aug', False)
         self.scale_range   = config.get('scale_range', [0.8, 1.2])
+
+        # ---- Tile 采样 ----
+        self.use_tile_sampling = config.get('use_tile_sampling', False)
 
         # ---- Early stopping ----
         self.early_stop = config.get('early_stop', True)
@@ -376,20 +382,42 @@ class FocalLoss(nn.Module):
         return focal.sum()
 
 
-def dice_loss(logits, targets, smooth=1.0):
+def dice_loss(logits, targets, smooth=1.0, fault_dilate=0):
+    """前景类 Dice Loss. fault_dilate>0 时对 Fault GT 做膨胀, 宽容边界误差."""
     probs = torch.softmax(logits, dim=1)
     dice = 0.0
     for c in range(1, logits.shape[1]):
         p = probs[:, c]
         g = (targets == c).float()
+        if c == 3 and fault_dilate > 0:  # Fault GT 膨胀 r=1→kernel=3
+            k = fault_dilate * 2 + 1
+            g = F.max_pool2d(g.unsqueeze(1), kernel_size=k, stride=1,
+                             padding=fault_dilate).squeeze(1)
         inter = (p * g).sum(dim=(1, 2))
         union = p.sum(dim=(1, 2)) + g.sum(dim=(1, 2))
         dice += (1 - (2 * inter + smooth) / (union + smooth)).mean()
     return dice / (logits.shape[1] - 1)
 
 
-def combined_loss(criterion, logits, targets):
-    return criterion(logits, targets) + 0.5 * dice_loss(logits, targets)
+def fault_fp_penalty(logits, targets, dilate=2):
+    """惩罚膨胀 GT 区域外的 Fault 预测 — 直接打击假阳性噪点."""
+    probs = torch.softmax(logits, dim=1)
+    fault_prob = probs[:, 3]  # Fault channel
+    gt_fault = (targets == 3).float()
+    # 生成"宽容区域": Fault GT 膨胀后, 几乎不可能漏检
+    k = dilate * 2 + 1
+    dilated_gt = F.max_pool2d(gt_fault.unsqueeze(1), kernel_size=k, stride=1,
+                              padding=dilate).squeeze(1)
+    # 膨胀区外的一切 Fault 预测 = 假阳性, 直接惩罚
+    outside = (1.0 - dilated_gt) * fault_prob
+    return outside.mean()
+
+
+def combined_loss(criterion, logits, targets, fault_dilate=0, fault_fp_weight=0.0):
+    total = criterion(logits, targets) + 0.5 * dice_loss(logits, targets, fault_dilate=fault_dilate)
+    if fault_fp_weight > 0:
+        total = total + fault_fp_weight * fault_fp_penalty(logits, targets, dilate=fault_dilate)
+    return total
 
 
 # ============================================================================
@@ -565,7 +593,25 @@ def train(hp: HyperParameter):
     else:
         train_data = train_data_raw
 
-    train_iter = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True,
+    # ---- Tile 加权采样 ----
+    train_sampler = None
+    if hp.use_tile_sampling:
+        from torch.utils.data import WeightedRandomSampler
+        print('Pre-computing tile sampling weights...')
+        tile_weights = []
+        for i in tqdm(range(len(train_data_raw)), desc='Computing weights'):
+            _, mask, _ = train_data_raw[i]
+            fg_ratio = (mask > 0).float().mean().item()
+            # sqrt 映射: 拉高中等前景的权重，不压死纯背景
+            tile_weights.append(fg_ratio ** 0.5 + 0.01)
+        train_sampler = WeightedRandomSampler(
+            tile_weights, num_samples=len(train_data_raw), replacement=True)
+        avg_w = np.mean(tile_weights)
+        print(f'Tile 加权采样: weights avg={avg_w:.4f}, min={min(tile_weights):.4f}, '
+              f'max={max(tile_weights):.4f}')
+
+    train_iter = DataLoader(train_data, batch_size=hp.batch_size,
+                            sampler=train_sampler,
                             num_workers=2 if use_cuda else 0,
                             pin_memory=use_cuda, drop_last=True)
     val_iter   = DataLoader(val_data,   batch_size=1, shuffle=False,
@@ -583,13 +629,19 @@ def train(hp: HyperParameter):
     print(f'Class weights: {class_weights.tolist()}')
     if hp.use_focal_loss:
         criterion = FocalLoss(alpha=class_weights, gamma=hp.focal_gamma)
-        print(f'Loss: Focal(γ={hp.focal_gamma}) + 0.5*Dice')
+        loss_base = f'Focal(γ={hp.focal_gamma})'
     else:
         criterion = nn.CrossEntropyLoss(weight=class_weights)
-        print(f'Loss: CE + 0.5*Dice')
+        loss_base = 'CE'
+    extras = []
+    if hp.use_fault_penalty:
+        extras.append(f'FaultPen(dilate={hp.fault_dilate},w={hp.fault_fp_weight})')
+    print(f'Loss: {loss_base} + 0.5*Dice' + (' + ' + ' + '.join(extras) if extras else ''))
 
     def loss_fn(logits, targets):
-        return combined_loss(criterion, logits, targets)
+        return combined_loss(criterion, logits, targets,
+                             fault_dilate=hp.fault_dilate if hp.use_fault_penalty else 0,
+                             fault_fp_weight=hp.fault_fp_weight if hp.use_fault_penalty else 0.0)
 
     # ---- 优化器 & 调度器 ----
     optimizer = optim.AdamW(
@@ -804,11 +856,18 @@ def train(hp: HyperParameter):
         import zipfile
         zip_path = '/kaggle/working/result.zip'
         print(f'打包结果: {zip_path} ...')
+        skip_count = 0
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, dirs, files in os.walk(hp.result_dir):
                 for f in files:
+                    # 跳过所有 checkpoint (best_small.pth 已包含最佳权重, optimizer 状态无用)
+                    if f.startswith('ckpt_') and f.endswith('.pth'):
+                        skip_count += 1
+                        continue
                     fpath = os.path.join(root, f)
                     zf.write(fpath, os.path.relpath(fpath, '/kaggle/working'))
+        if skip_count:
+            print(f'  跳过 {skip_count} 个 checkpoint')
         zip_size = os.path.getsize(zip_path) / 1024 / 1024
         print(f'打包完成: {zip_path} ({zip_size:.1f} MB)')
 
@@ -842,7 +901,7 @@ if __name__ == '__main__':
     loss_name = f'Focal(γ={hp.focal_gamma})' if hp.use_focal_loss else 'CE'
     clip_str = hp.grad_clip_norm if hp.grad_clip_norm > 0 else 'off'
     print(f'Loss: {loss_name} + 0.5*Dice, wd={hp.weight_decay}, clip={clip_str}')
-    print(f'Aug: {hp.use_augment}, Scale: {hp.use_scale_aug} ({hp.scale_range}), CopyPaste: {hp.use_copypaste} (p={hp.copypaste_p})')
+    print(f'Aug: {hp.use_augment}, Scale: {hp.use_scale_aug} ({hp.scale_range}), CopyPaste: {hp.use_copypaste} (p={hp.copypaste_p}), TileSample: {hp.use_tile_sampling}')
     print(f'Modules: StripPool={hp.use_strip_pooling}, CoordAttn={hp.use_coord_attention}, '
           f'LocalCNN={hp.use_local_cnn}, '
           f'BoundaryLoss={hp.use_boundary_loss}, DEM-Guided={hp.use_dem_guided} '
