@@ -35,7 +35,9 @@ def main():
         pth_files = sorted([f for f in files if f.startswith('best_') and f.endswith('.pth')])
         if pth_files:
             best_pth = os.path.join(root, pth_files[0])
-            history_path = os.path.join(root, 'history.json')
+            # 兼容 Kaggle 偶发的文件名空格 bug (history .json)
+            json_candidates = [f for f in files if f.replace(' ', '') == 'history.json']
+            history_path = os.path.join(root, json_candidates[0]) if json_candidates else None
             # 自动检测 model_size
             model_size = pth_files[0].replace('best_', '').replace('.pth', '')
             print(f'  Found: {pth_files[0]} (model_size={model_size})')
@@ -45,8 +47,8 @@ def main():
         print(f'ERROR: 找不到 best_*.pth')
         return
 
-    if not best_pth:
-        print(f'ERROR: 找不到 best_base.pth')
+    if not history_path:
+        print(f'ERROR: 找不到 history.json')
         return
 
     # 读取 best epoch

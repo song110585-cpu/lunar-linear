@@ -41,6 +41,19 @@ from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+
+def set_seed(seed: int):
+    """固定 Python / NumPy / PyTorch 随机种子, 保证可复现."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
 # ============================================================================
 # 环境检测
 # ============================================================================
@@ -165,6 +178,9 @@ class HyperParameter:
         # ---- 优化器正则 ----
         self.weight_decay   = config.get('weight_decay', 0.01)
         self.grad_clip_norm = config.get('grad_clip_norm', 0.0)
+
+        # ---- 随机种子 (None=不固定, 沿用默认行为) ----
+        self.seed = config.get('seed', None)
 
         # ---- 数据增强 ----
         self.use_scale_aug = config.get('use_scale_aug', False)
@@ -888,6 +904,12 @@ if __name__ == '__main__':
 
     env = detect_env()
     hp = HyperParameter(env, config=args.config)
+
+    if hp.seed is not None:
+        set_seed(hp.seed)
+        print(f'Seed: {hp.seed} (deterministic mode)')
+    else:
+        print('Seed: not fixed (default non-deterministic behavior)')
 
     print(f'Environment: {"Kaggle" if hp.is_kaggle else "Local"}')
     print(f'Data: {hp.train_image_dir}')

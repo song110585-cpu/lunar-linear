@@ -7,7 +7,7 @@ from PIL import Image
 from tqdm import tqdm
 import rasterio
 
-PRED_DIR = r"E:\月球_dataset\baseline模型结果\result29\result\result\best_epoch_58_val_miou_0.6002\pred_mask"
+PRED_DIR = r"E:\月球_dataset\baseline模型结果\result32\result\result\best_epoch_56_val_miou_0.5758\pred_mask"
 GT_DIR   = r"E:\月球_dataset\Research area\train\dataset_v6\mask"
 VAL_LIST = r"E:\月球_dataset\Research area\dataset_analysis\valid_tiles_val.txt"
 

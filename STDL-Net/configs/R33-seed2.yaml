@@ -1,6 +1,8 @@
-# R33: R26 Baseline + Weighted Tile Sampling
-# 按前景占比加权采样: 高前景tile更频繁出现, 缓解96%背景主导问题
-# 用法: python scripts/train.py --config configs/R33.yaml
+# R33-seed2: R33 固定种子重跑 — 验证加权采样稳定性
+# 与 R33 完全相同的超参, 仅固定 seed=42
+# 用法: python scripts/train.py --config configs/R33-seed2.yaml
+
+seed: 42
 
 # ---- 核心参数 ----
 num_classes: 5

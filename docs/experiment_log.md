@@ -450,3 +450,63 @@ fault_fp_weight: 0.1      # 假阳性惩罚权重
 python scripts/train.py --config configs/R32.yaml
 ```
 
+---
+
+# R33 Weighted Tile Sampling (small 模型 + 真正启用加权采样)
+
+## 改动
+
+R26 Baseline (small) + **加权 Tile 采样** (真正启用 `use_tile_sampling: true`)
+
+与 R31 的关键区别:
+- R31 使用了 base 模型，但 YAML 中 `use_tile_sampling: false`，加权采样**未生效**
+- R33 使用 small 模型，`use_tile_sampling: true`，加权采样**真正生效**
+- 权重公式: `sqrt(fg_ratio) + 0.01`
+
+## 结果 (Val, 107 tiles)
+
+```text
+============================================================
+验证集最终成绩 (Validation Set Evaluation)
+Overall Accuracy: 0.9800
+Mean mIoU:        0.6523
+============================================================
+Class                 IoU     Prec   Recall       F1
+--------------------------------------------------
+Background         0.9794   0.9925   0.9867   0.9896
+Wrinkle Ridge      0.5604   0.6598   0.7882   0.7183
+Rille              0.5819   0.6862   0.7928   0.7357
+Fault              0.4040   0.4530   0.7887   0.5755
+Graben             0.7356   0.8533   0.8421   0.8477
+--------------------------------------------------
+```
+
+| 指标 | R26 (small, 无采样) | R31 (base, 无采样) | **R33 (small, 有采样)** |
+|---|---|---|---|
+| mIoU | 0.6031 | 0.6041 | **0.6523** |
+| OA | 0.9802 | 0.9731 | 0.9800 |
+| Fault IoU | 0.3621 | 0.3713 | **0.4040** |
+| Fault Prec | 0.4024 | 0.4029 | **0.4530** |
+| Fault Recall | 0.8000 | 0.8257 | 0.7887 |
+| Graben IoU | 0.3831 | 0.6110 | **0.7356** |
+| Rille IoU | 0.4496 | 0.5422 | **0.5819** |
+| Wrinkle Ridge IoU | 0.4412 | 0.5236 | **0.5604** |
+
+## 结论
+
+1. **新 SOTA**: mIoU 0.6523，且仅用 small 模型，性价比极高
+2. **加权采样是核心突破**: 所有前景类别全面提升，Graben 暴涨 +20.4%
+3. **Fault 仍是难例**: Precision 45.3% 虽有提升但仍偏低，需持续关注
+4. **种子稳定性待验证**: R33 初次运行未设 seed，需固定种子重跑确认结果稳定
+
+## 训练命令
+
+```bash
+# 原始 R33 (无固定 seed)
+python scripts/train.py --config configs/R33.yaml
+
+# 种子稳定性验证
+python scripts/train.py --config configs/R33-seed2.yaml   # seed=42
+python scripts/train.py --config configs/R33-seed3.yaml   # seed=123
+```
+
