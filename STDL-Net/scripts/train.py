@@ -188,6 +188,7 @@ class HyperParameter:
 
         # ---- Tile 采样 ----
         self.use_tile_sampling = config.get('use_tile_sampling', False)
+        self.tile_sample_exp  = config.get('tile_sample_exp', 0.5)  # 前景占比指数, 越低≈采样越均匀
 
         # ---- Early stopping ----
         self.early_stop = config.get('early_stop', True)
@@ -618,8 +619,7 @@ def train(hp: HyperParameter):
         for i in tqdm(range(len(train_data_raw)), desc='Computing weights'):
             _, mask, _ = train_data_raw[i]
             fg_ratio = (mask > 0).float().mean().item()
-            # sqrt 映射: 拉高中等前景的权重，不压死纯背景
-            tile_weights.append(fg_ratio ** 0.5 + 0.01)
+            tile_weights.append(fg_ratio ** hp.tile_sample_exp + 0.01)
         train_sampler = WeightedRandomSampler(
             tile_weights, num_samples=len(train_data_raw), replacement=True)
         avg_w = np.mean(tile_weights)
