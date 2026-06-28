@@ -605,7 +605,7 @@ Strip Pooling 第三次实验仍大幅退步（R19 R25 R36）。方向彻底废�
 
 ---
 
-# R37 Base 模型 (进行中)
+# R37 Base 模型 (★ 新 SOTA)
 
 ## 改动
 
@@ -614,9 +614,34 @@ R34 + **base 模型** (`model_size: base`)
 - R31 用了 base 但 tile sampling 未生效（配置 bug），这是第一次真正验证 "base + 加权采样"
 - batch=2, accum=2 (等效 BS=4)
 
+## 结果 (Val, seed=42)
+
+| 指标 | R34 (small) | **R37 (base)** | Δ |
+|---|---|---|---|
+| **mIoU** | 0.6425 | **0.6613** | **+0.019** |
+| OA | 0.9774 | 0.9794 | +0.002 |
+| WR IoU | 0.5417 | **0.6039** | +0.062 |
+| WR Prec | 60.1% | **69.7%** | +9.6pp |
+| Rille IoU | 0.6008 | **0.6097** | +0.009 |
+| Rille Prec | 69.1% | **75.0%** | +5.9pp |
+| Fault IoU | 0.3843 | **0.3943** | +0.010 |
+| Fault Prec | 42.2% | 42.3% | +0.1pp |
+| Fault Recall | 81.2% | **85.3%** | +4.1pp |
+| Graben IoU | 0.7091 | **0.7201** | +0.011 |
+
+Loss gap: 0.120 (R34=0.059)，有所回升但可接受。
+
+## 结论
+
+1. **Base 模型是继加权采样后第二个有效突破**，mIoU 0.6613 新 SOTA
+2. **Precision 全线提升**（WR +10pp, Rille +6pp），base 骨架更强的表达能力让线状构造 vs 背景区分更准
+3. **Fault Precision 纹丝不动** (42.3%)，这可能是数据标注/特征本身的上限，非模型容量问题
+
 ## 训练命令
 
 ```bash
+python scripts/train.py --config configs/R37.yaml
+```
 python scripts/train.py --config configs/R37.yaml
 ```
 

@@ -1,6 +1,9 @@
-# R31: R26 Baseline + base模型
-# 按前景占比加权采样: 高前景tile更频繁出现, 缓解96%背景主导问题
-# 用法: python scripts/train.py --config configs/R31.yaml
+# R38: R37 新SOTA + Focal Loss
+# Focal Loss: 自动聚焦难例, 抑制简单背景像素 → 提升 WR/Rille Precision
+# 之前从未搭配加权采样+base跑过, 这次在新的强基线上验证
+# 用法: python scripts/train.py --config configs/R38.yaml
+
+seed: 42
 
 # ---- 核心参数 ----
 num_classes: 5
@@ -10,8 +13,8 @@ freeze_stages: 1
 
 num_epochs: 60
 max_steps: 0
-batch_size: 4
-accum_steps: 1
+batch_size: 2
+accum_steps: 2
 learning_rate: 5.0e-5
 
 # ---- 优化器正则 ----
@@ -29,18 +32,21 @@ use_boundary_loss: false
 use_dem_guided: false
 terrain_channels: 4
 
-# ---- 损失函数 ----
-use_focal_loss: false
+# ---- 损失函数 (R38 加 Focal) ----
+use_focal_loss: true
+focal_gamma: 2.0
 
 # ---- 数据增强 ----
-use_scale_aug: false
+use_scale_aug: true
+scale_range: [0.9, 1.1]
 
 # ---- Tile 采样 ----
-use_tile_sampling: false       # 按前景占比加权采样
+use_tile_sampling: true
+tile_sample_exp: 0.3
 
 # ---- Early stopping ----
 early_stop: true
-patience: 12
+patience: 8
 
 # ---- 导出开关 ----
 save_val_on_best: true
