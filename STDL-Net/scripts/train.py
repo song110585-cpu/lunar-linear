@@ -165,6 +165,8 @@ class HyperParameter:
         self.use_coord_attention = config.get('use_coord_attention', False)
         self.use_local_cnn      = config.get('use_local_cnn', False)
         self.use_boundary_loss  = config.get('use_boundary_loss', False)
+        self.boundary_loss_wt   = config.get('boundary_loss_weight', 0.5)
+        self.boundary_kernel    = config.get('boundary_kernel_size', 3)
         self.use_dem_guided     = config.get('use_dem_guided', True)
         self.terrain_channels   = config.get('terrain_channels', 4)
 
@@ -430,6 +432,23 @@ def fault_fp_penalty(logits, targets, dilate=2):
     return outside.mean()
 
 
+def boundary_loss(logits, targets, kernel_size=3):
+    """边界监督损失: GT 边缘像素额外加权 CE, 强制边界清晰."""
+    # 提取 GT 边界: |dilate - erode|
+    k = kernel_size * 2 + 1  # 3→7
+    pad = kernel_size
+    gt_onehot = F.one_hot(targets, num_classes=logits.shape[1]).permute(0, 3, 1, 2).float()
+    dilated = F.max_pool2d(gt_onehot, kernel_size=k, stride=1, padding=pad)
+    eroded = -F.max_pool2d(-gt_onehot, kernel_size=k, stride=1, padding=pad)
+    bound = (dilated - eroded).clamp(0, 1)  # [B, C, H, W], 边界=1
+    bound_mask = bound.sum(dim=1).clamp(0, 1)  # [B, H, W], 任一类别的边界
+
+    # 边界像素 CE
+    ce = F.cross_entropy(logits, targets, reduction='none')  # [B, H, W]
+    bound_ce = (ce * bound_mask).sum() / (bound_mask.sum() + 1e-6)
+    return bound_ce
+
+
 def combined_loss(criterion, logits, targets, fault_dilate=0, fault_fp_weight=0.0):
     total = criterion(logits, targets) + 0.5 * dice_loss(logits, targets, fault_dilate=fault_dilate)
     if fault_fp_weight > 0:
@@ -655,9 +674,12 @@ def train(hp: HyperParameter):
     print(f'Loss: {loss_base} + 0.5*Dice' + (' + ' + ' + '.join(extras) if extras else ''))
 
     def loss_fn(logits, targets):
-        return combined_loss(criterion, logits, targets,
+        loss = combined_loss(criterion, logits, targets,
                              fault_dilate=hp.fault_dilate if hp.use_fault_penalty else 0,
                              fault_fp_weight=hp.fault_fp_weight if hp.use_fault_penalty else 0.0)
+        if hp.use_boundary_loss:
+            loss = loss + hp.boundary_loss_wt * boundary_loss(logits, targets, hp.boundary_kernel)
+        return loss
 
     # ---- 优化器 & 调度器 ----
     optimizer = optim.AdamW(
