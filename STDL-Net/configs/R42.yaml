@@ -46,7 +46,7 @@ tile_sample_exp: 0.3
 
 # ---- Early stopping ----
 early_stop: true
-patience: 8
+patience: 15                      # R41=8, 权重偏激时波动大需要更长容忍
 
 # ---- 导出开关 ----
 save_val_on_best: true
