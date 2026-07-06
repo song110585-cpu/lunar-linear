@@ -55,4 +55,4 @@ save_pred_mask_png: true
 save_pred_vis_png: true
 
 # ---- 类别权重 (R42 继续微调) ----
-class_weights: [0.15, 0.5, 1.8, 1.8, 1.5]
+class_weights: [0.15, 0.65, 1.6, 1.8, 1.5]  # WR 0.7→0.65 温和, Rille 1.5→1.6
