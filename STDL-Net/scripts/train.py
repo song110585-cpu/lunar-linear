@@ -169,6 +169,8 @@ class HyperParameter:
         self.boundary_kernel    = config.get('boundary_kernel_size', 3)
         self.use_dem_guided     = config.get('use_dem_guided', True)
         self.terrain_channels   = config.get('terrain_channels', 4)
+        self.use_deep_supervision = config.get('use_deep_supervision', False)
+        self.deep_sup_weight    = config.get('deep_sup_weight', 0.3)
 
         # ---- 损失函数 ----
         self.use_focal_loss   = config.get('use_focal_loss', False)
@@ -176,6 +178,9 @@ class HyperParameter:
         self.use_fault_penalty = config.get('use_fault_penalty', False)
         self.fault_dilate      = config.get('fault_dilate', 1)
         self.fault_fp_weight   = config.get('fault_fp_weight', 0.1)
+        self.use_tversky_loss  = config.get('use_tversky_loss', False)
+        self.tversky_alpha     = config.get('tversky_alpha', 0.7)  # FP 惩罚
+        self.tversky_beta      = config.get('tversky_beta',  0.3)  # FN 惩罚
 
         # ---- 优化器正则 ----
         self.weight_decay   = config.get('weight_decay', 0.01)
@@ -418,6 +423,23 @@ def dice_loss(logits, targets, smooth=1.0, fault_dilate=0):
     return dice / (logits.shape[1] - 1)
 
 
+def tversky_loss(logits, targets, alpha=0.7, beta=0.3, smooth=1.0):
+    """Tversky 损失: 用 α/β 独立控制 FP 和 FN 惩罚.
+    α > β → 更重罚 FP → 提升 Precision; β > α → 更重罚 FN → 提升 Recall.
+    """
+    probs = torch.softmax(logits, dim=1)
+    loss = 0.0
+    for c in range(1, logits.shape[1]):
+        p = probs[:, c]
+        g = (targets == c).float()
+        tp = (p * g).sum(dim=(1, 2))
+        fp = (p * (1 - g)).sum(dim=(1, 2))
+        fn = ((1 - p) * g).sum(dim=(1, 2))
+        ti = (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
+        loss += (1 - ti).mean()
+    return loss / (logits.shape[1] - 1)
+
+
 def fault_fp_penalty(logits, targets, dilate=2):
     """惩罚膨胀 GT 区域外的 Fault 预测 — 直接打击假阳性噪点."""
     probs = torch.softmax(logits, dim=1)
@@ -449,8 +471,11 @@ def boundary_loss(logits, targets, kernel_size=3):
     return bound_ce
 
 
-def combined_loss(criterion, logits, targets, fault_dilate=0, fault_fp_weight=0.0):
-    total = criterion(logits, targets) + 0.5 * dice_loss(logits, targets, fault_dilate=fault_dilate)
+def combined_loss(criterion, logits, targets, fault_dilate=0, fault_fp_weight=0.0,
+                  use_tversky=False, tversky_alpha=0.7, tversky_beta=0.3):
+    dice_fn = (lambda l, t: tversky_loss(l, t, tversky_alpha, tversky_beta)) if use_tversky \
+              else (lambda l, t: dice_loss(l, t, fault_dilate=fault_dilate))
+    total = criterion(logits, targets) + 0.5 * dice_fn(logits, targets)
     if fault_fp_weight > 0:
         total = total + fault_fp_weight * fault_fp_penalty(logits, targets, dilate=fault_dilate)
     return total
@@ -472,7 +497,8 @@ def export_all_test(model, test_iter, save_root, epoch, num_classes, device, use
     with torch.no_grad(), amp_ctx:
         for img, label, name in tqdm(test_iter, desc=f'Export@E{epoch}', unit='img'):
             img, label = img.to(device), label.to(device)
-            pred = model(img).argmax(dim=1)
+            out = model(img)
+            pred = (out[0] if isinstance(out, tuple) else out).argmax(dim=1)
 
             pred_np = pred[0].cpu().numpy().astype(np.uint8)
             gt_np   = label[0].cpu().numpy().astype(np.uint8)
@@ -579,6 +605,8 @@ def train(hp: HyperParameter):
     if 'use_dem_guided' in init_params and hp.use_dem_guided:
         model_kwargs['use_dem_guided'] = True
         model_kwargs['terrain_channels'] = hp.terrain_channels
+    if 'use_deep_supervision' in init_params and hp.use_deep_supervision:
+        model_kwargs['use_deep_supervision'] = True
 
     if hp.use_dem_guided and 'use_dem_guided' not in init_params:
         raise RuntimeError(
@@ -673,12 +701,18 @@ def train(hp: HyperParameter):
         extras.append(f'FaultPen(dilate={hp.fault_dilate},w={hp.fault_fp_weight})')
     print(f'Loss: {loss_base} + 0.5*Dice' + (' + ' + ' + '.join(extras) if extras else ''))
 
-    def loss_fn(logits, targets):
+    def loss_fn(logits, targets, aux_logits=None):
         loss = combined_loss(criterion, logits, targets,
                              fault_dilate=hp.fault_dilate if hp.use_fault_penalty else 0,
-                             fault_fp_weight=hp.fault_fp_weight if hp.use_fault_penalty else 0.0)
+                             fault_fp_weight=hp.fault_fp_weight if hp.use_fault_penalty else 0.0,
+                             use_tversky=hp.use_tversky_loss,
+                             tversky_alpha=hp.tversky_alpha,
+                             tversky_beta=hp.tversky_beta)
         if hp.use_boundary_loss:
             loss = loss + hp.boundary_loss_wt * boundary_loss(logits, targets, hp.boundary_kernel)
+        if aux_logits is not None:
+            aux_loss = sum(criterion(a, targets) for a in aux_logits) / len(aux_logits)
+            loss = loss + hp.deep_sup_weight * aux_loss
         return loss
 
     # ---- 优化器 & 调度器 ----
@@ -727,8 +761,12 @@ def train(hp: HyperParameter):
             img, label = img.to(device), label.to(device)
 
             with amp_ctx:
-                logits = model(img)
-                l = loss_fn(logits, label) / hp.accum_steps
+                out = model(img)
+                if isinstance(out, tuple):
+                    logits, aux_logits = out
+                else:
+                    logits, aux_logits = out, None
+                l = loss_fn(logits, label, aux_logits) / hp.accum_steps
 
             if scaler is not None:
                 scaler.scale(l).backward()
@@ -771,7 +809,8 @@ def train(hp: HyperParameter):
                 if hp.max_steps > 0 and len(val_losses) >= hp.max_steps:
                     break
                 img, label = img.to(device), label.to(device)
-                logits = model(img)
+                out = model(img)
+                logits = out[0] if isinstance(out, tuple) else out
                 val_losses.append(loss_fn(logits, label).item())
                 pred = logits.argmax(dim=1)
                 val_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
@@ -863,7 +902,8 @@ def train(hp: HyperParameter):
         with torch.no_grad(), amp_ctx:
             for img, label, name in tqdm(test_iter, desc='Final Test Evaluation', unit='img'):
                 img, label = img.to(device), label.to(device)
-                logits = model(img)
+                out = model(img)
+                logits = out[0] if isinstance(out, tuple) else out
                 test_losses.append(loss_fn(logits, label).item())
                 pred = logits.argmax(dim=1)
                 test_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
@@ -943,12 +983,14 @@ if __name__ == '__main__':
           f'LR: {hp.learning_rate}')
     print(f'Freeze stages: {hp.freeze_stages}')
     loss_name = f'Focal(γ={hp.focal_gamma})' if hp.use_focal_loss else 'CE'
+    dice_name = f'Tversky(α={hp.tversky_alpha},β={hp.tversky_beta})' if hp.use_tversky_loss else 'Dice'
     clip_str = hp.grad_clip_norm if hp.grad_clip_norm > 0 else 'off'
-    print(f'Loss: {loss_name} + 0.5*Dice, wd={hp.weight_decay}, clip={clip_str}')
+    print(f'Loss: {loss_name} + 0.5*{dice_name}, wd={hp.weight_decay}, clip={clip_str}')
     print(f'Aug: {hp.use_augment}, Scale: {hp.use_scale_aug} ({hp.scale_range}), CopyPaste: {hp.use_copypaste} (p={hp.copypaste_p}), TileSample: {hp.use_tile_sampling}')
     print(f'Modules: StripPool={hp.use_strip_pooling}, CoordAttn={hp.use_coord_attention}, '
           f'LocalCNN={hp.use_local_cnn}, '
-          f'BoundaryLoss={hp.use_boundary_loss}, DEM-Guided={hp.use_dem_guided} '
+          f'BoundaryLoss={hp.use_boundary_loss}, DeepSup={hp.use_deep_supervision}, '
+          f'DEM-Guided={hp.use_dem_guided} '
           f'(terrain={hp.terrain_channels})')
     print(f'EarlyStop: {hp.early_stop} (patience={hp.patience})')
     print(f'Result dir: {hp.result_dir}')

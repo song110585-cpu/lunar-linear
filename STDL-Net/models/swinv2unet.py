@@ -1554,7 +1554,8 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
     def __init__(self, size="base", img_size=512, num_classes=1, in_channels=3, pretrained=True,
                  use_strip_pooling=False, use_coord_attention=False,
                  use_local_cnn=False,
-                 use_dem_guided=False, terrain_channels=4):
+                 use_dem_guided=False, terrain_channels=4,
+                 use_deep_supervision=False):
         super(Swin_LCSRB_DeformablePSP_FPNPAN, self).__init__()
 
         # 初始化主干网络
@@ -1611,6 +1612,20 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
         # 解码头
         self.head = nn.Conv2d(fpn_out, num_classes, kernel_size=3, padding=1)
 
+        # Deep Supervision: 在 FPNPAN 前3个特征图上加辅助头
+        self.use_deep_supervision = use_deep_supervision
+        if use_deep_supervision:
+            aux_out = fpn_out // 2
+            self.aux_heads = nn.ModuleList([
+                nn.Sequential(
+                    nn.Conv2d(fpn_out, aux_out, 3, 1, 1, bias=False),
+                    nn.BatchNorm2d(aux_out),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(aux_out, num_classes, 1)
+                ) for _ in range(3)
+            ])
+            print(f'[DeepSup] 3 aux heads on FPNPAN features (fpn_out={fpn_out})')
+
     def freeze_backbone_stages(self, num_stages=2):
         """冻结 backbone 前 num_stages 个阶段 (含 patch_embed)."""
         # 冻结 patch_embed
@@ -1654,8 +1669,22 @@ class Swin_LCSRB_DeformablePSP_FPNPAN(nn.Module):
 
         features[-1] = self.PPN(features[-1])  # 使用可变形 PPM 处理最后一层特征
         features = self.FPNPAN(features)  # 使用 FPNPAN 处理特征
+
+        # Deep Supervision: 在主 head 之前, 用 aux heads 产生辅助输出
+        aux_logits = None
+        if self.use_deep_supervision:
+            aux_logits = [aux_head(f) for aux_head, f in zip(self.aux_heads, features[:3])]
+            # 上采样到输入尺寸
+            aux_logits = [F.interpolate(a, size=input_size, mode='bilinear', align_corners=True)
+                          for a in aux_logits]
+
         features = self.conv_fusion(torch.cat((features), dim=1))  # 融合特征
         features = self.head(features)  # 经过解码头
+
+        features = F.interpolate(features, size=input_size, mode='bilinear')  # 上采样到原始输入尺寸
+        if aux_logits is not None:
+            return features, aux_logits
+        return features  # 返回最终的输出特征图
 
         features = F.interpolate(features, size=input_size, mode='bilinear')  # 上采样到原始输入尺寸
         return features  # 返回最终的输出特征图
