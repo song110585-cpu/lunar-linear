@@ -1,6 +1,6 @@
 """
 用 best_small.pth 对验证集做推理，生成 pred_mask PNG。
-用法: python STDL-Net/scripts/export_val.py E:\月球_dataset\baseline模型结果\result30
+用法:python STDL-Net/scripts/export_val.py "E:\月球_dataset\output\result43\result-2"
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,20 +28,24 @@ def main():
     parser.add_argument('result_dir', help='结果目录路径')
     args = parser.parse_args()
 
-    # 找 best_*.pth 和 history.json
+    # 找 best_*.pth 和 history.json — 遍历所有子目录, 选最新的
     best_pth = None
     history_path = None
+    model_size = None
+    candidates = []
     for root, dirs, files in os.walk(args.result_dir):
         pth_files = sorted([f for f in files if f.startswith('best_') and f.endswith('.pth')])
-        if pth_files:
-            best_pth = os.path.join(root, pth_files[0])
-            # 兼容 Kaggle 偶发的文件名空格 bug (history .json)
-            json_candidates = [f for f in files if f.replace(' ', '') == 'history.json']
-            history_path = os.path.join(root, json_candidates[0]) if json_candidates else None
-            # 自动检测 model_size
-            model_size = pth_files[0].replace('best_', '').replace('.pth', '')
-            print(f'  Found: {pth_files[0]} (model_size={model_size})')
-            break
+        for pf in pth_files:
+            fp = os.path.join(root, pf)
+            candidates.append((os.path.getmtime(fp), fp, root))
+    if candidates:
+        candidates.sort(reverse=True)  # 按修改时间倒序, 最新的排第一
+        _, best_pth, root = candidates[0]
+        model_size = os.path.basename(best_pth).replace('best_', '').replace('.pth', '')
+        json_candidates = [f for f in os.listdir(root) if f.replace(' ', '') == 'history.json']
+        history_path = os.path.join(root, json_candidates[0]) if json_candidates else None
+        print(f'  Found: {os.path.basename(best_pth)} (model_size={model_size}) '
+              f'[{len(candidates)} total, using latest]')
 
     if not best_pth:
         print(f'ERROR: 找不到 best_*.pth')
