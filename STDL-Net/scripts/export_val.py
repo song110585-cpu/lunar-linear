@@ -34,16 +34,36 @@ def main():
     model_size = None
     candidates = []
     for root, dirs, files in os.walk(args.result_dir):
-        pth_files = sorted([f for f in files if f.startswith('best_') and f.endswith('.pth')])
+        # 常规 .pth 文件
+        pth_files = sorted([f for f in files if f.startswith('best_')])
         for pf in pth_files:
             fp = os.path.join(root, pf)
             candidates.append((os.path.getmtime(fp), fp, root))
+        # Kaggle 下载时自动解压的目录 (best_base/ 内含 data.pkl)
+        for d in dirs:
+            if d.startswith('best_'):
+                dp = os.path.join(root, d)
+                inner = os.path.join(dp, 'data.pkl')
+                if os.path.isfile(inner):
+                    candidates.append((os.path.getmtime(dp), dp, root))
     if candidates:
         candidates.sort(reverse=True)  # 按修改时间倒序, 最新的排第一
         _, best_pth, root = candidates[0]
         model_size = os.path.basename(best_pth).replace('best_', '').replace('.pth', '')
-        json_candidates = [f for f in os.listdir(root) if f.replace(' ', '') == 'history.json']
-        history_path = os.path.join(root, json_candidates[0]) if json_candidates else None
+        all_files = os.listdir(root)
+        json_candidates = [f for f in all_files if f.replace(' ', '') in ('history.json', 'history.txt', 'history')]
+        if not json_candidates:
+            # 上级目录也找一下
+            parent = os.path.dirname(root)
+            if os.path.isdir(parent):
+                json_candidates = [f for f in os.listdir(parent) if f.replace(' ', '') in ('history.json', 'history.txt', 'history')]
+                if json_candidates:
+                    history_path = os.path.join(parent, json_candidates[0])
+                    root = parent
+        if not json_candidates:
+            history_path = None
+        else:
+            history_path = os.path.join(root, json_candidates[0])
         print(f'  Found: {os.path.basename(best_pth)} (model_size={model_size}) '
               f'[{len(candidates)} total, using latest]')
 
@@ -75,7 +95,9 @@ def main():
     print(f'Device: {device}')
 
     # Auto-detect: 从 state_dict 键判断模块配置
-    state = torch.load(best_pth, map_location='cpu')
+    # 兼容 Kaggle 自动解压: 目录格式直接传目录路径给 torch.load
+    load_path = best_pth
+    state = torch.load(load_path, map_location='cpu', weights_only=False)
     has_local_cnn = any(k.startswith('lc2.') for k in state.keys())
     has_strip_pooling = any(k.startswith('sp2.') for k in state.keys())
     print(f'  Detected: LocalCNN={has_local_cnn}, StripPooling={has_strip_pooling}')

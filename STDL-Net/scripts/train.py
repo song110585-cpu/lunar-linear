@@ -62,8 +62,8 @@ def detect_env():
     """自动检测 Kaggle vs 本地环境, 返回路径配置和预训练目录."""
     if os.path.isdir('/kaggle'):
         # ---- Kaggle 环境 ----
-        # 优先使用最新的 datasetv6, 否则回退到 datasetv5
-        data_root = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
+        # 优先使用最新的 dataset
+        data_root = '/kaggle/input/datasets/changyasong/dataset7/datasetv7'
         # if not os.path.isdir(data_root):
         #     data_root = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
 
@@ -87,13 +87,15 @@ def detect_env():
             'is_kaggle': True,
             'train_image_dir': os.path.join(data_root, 'train', 'image'),
             'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+            'val_image_dir':   os.path.join(data_root, 'val', 'image'),
+            'val_mask_dir':    os.path.join(data_root, 'val', 'mask'),
             'test_image_dir':  os.path.join(data_root, 'test', 'image'),
             'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
             'pretrain_dir':    os.path.join(data_root, 'pretrain'),
             'record_path':     '/kaggle/working/result',
             'train_valid_list': train_list,
-            'val_valid_list':   _find_valid_list('valid_tiles_val.txt'),
-            'test_valid_list':  _find_valid_list('valid_tiles_test.txt'),
+            'val_valid_list':   None,
+            'test_valid_list':  None,
         }
     else:
         # ---- 本地环境 ----
@@ -102,14 +104,16 @@ def detect_env():
         train_list = train_split if os.path.isfile(train_split) else os.path.join(_filter_dir, 'valid_tiles_train.txt')
         return {
             'is_kaggle': False,
-            'train_image_dir': r'E:\月球_dataset\Research area\train\dataset_v5\image',
-            'train_mask_dir':  r'E:\月球_dataset\Research area\train\dataset_v5\mask',
-            'test_image_dir':  r'E:\月球_dataset\Research area\test\dataset_v5\image',
-            'test_mask_dir':   r'E:\月球_dataset\Research area\test\dataset_v5\mask',
+            'train_image_dir': r"E:\月球_dataset\Research area\train\dataset_v7_512\image",
+            'train_mask_dir':  r"E:\月球_dataset\Research area\train\dataset_v7_512\mask",
+            'val_image_dir':   r"E:\月球_dataset\Research area\val\dataset_v7_512\image",
+            'val_mask_dir':    r"E:\月球_dataset\Research area\val\dataset_v7_512\mask",
+            'test_image_dir':  r"E:\月球_dataset\Research area\test\dataset_v7_512\image",
+            'test_mask_dir':   r"E:\月球_dataset\Research area\test\dataset_v7_512\mask",
             'pretrain_dir':    None,  # 使用 swinv2unet.py 内置路径
             'record_path':     r'E:\月球_dataset\Research area\result',
             'train_valid_list': train_list,
-            'val_valid_list':   os.path.join(_filter_dir, 'valid_tiles_val.txt'),
+            'val_valid_list':   None,  # 独立 val 目录, 不须过滤
             'test_valid_list':  os.path.join(_filter_dir, 'valid_tiles_test.txt'),
         }
 
@@ -213,6 +217,8 @@ class HyperParameter:
         # ---- 数据路径 ----
         self.train_image_dir = env['train_image_dir']
         self.train_mask_dir  = env['train_mask_dir']
+        self.val_image_dir   = env.get('val_image_dir', env['train_image_dir'])
+        self.val_mask_dir    = env.get('val_mask_dir', env['train_mask_dir'])
         self.test_image_dir  = env['test_image_dir']
         self.test_mask_dir   = env['test_mask_dir']
 
@@ -633,8 +639,8 @@ def train(hp: HyperParameter):
         valid_list_file=hp.train_valid_list,
     )
     val_data = MyDataset(
-        images_dir=hp.train_image_dir,
-        masks_dir=hp.train_mask_dir,
+        images_dir=hp.val_image_dir,
+        masks_dir=hp.val_mask_dir,
         valid_list_file=hp.val_valid_list,
     )
     test_data = MyDataset(
