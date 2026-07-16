@@ -93,7 +93,7 @@ def detect_env():
             'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
             'pretrain_dir':    os.path.join(data_root, 'pretrain'),
             'record_path':     '/kaggle/working/result',
-            'train_valid_list': train_list,
+            'train_valid_list': None,
             'val_valid_list':   None,
             'test_valid_list':  None,
         }
@@ -112,9 +112,9 @@ def detect_env():
             'test_mask_dir':   r"E:\月球_dataset\Research area\test\dataset_v7_512\mask",
             'pretrain_dir':    None,  # 使用 swinv2unet.py 内置路径
             'record_path':     r'E:\月球_dataset\Research area\result',
-            'train_valid_list': train_list,
-            'val_valid_list':   None,  # 独立 val 目录, 不须过滤
-            'test_valid_list':  os.path.join(_filter_dir, 'valid_tiles_test.txt'),
+            'train_valid_list': None,
+            'val_valid_list':   None,
+            'test_valid_list':  None,
         }
 
 
