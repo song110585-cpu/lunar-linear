@@ -63,7 +63,7 @@ def detect_env():
     if os.path.isdir('/kaggle'):
         # ---- Kaggle 环境 ----
         # 优先使用最新的 dataset
-        data_root = '/kaggle/input/datasets/changyasong/dataset7/datasetv7'
+        data_root = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
         # if not os.path.isdir(data_root):
         #     data_root = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
 
@@ -104,12 +104,12 @@ def detect_env():
         train_list = train_split if os.path.isfile(train_split) else os.path.join(_filter_dir, 'valid_tiles_train.txt')
         return {
             'is_kaggle': False,
-            'train_image_dir': r"E:\月球_dataset\Research area\train\dataset_v7_512\image",
-            'train_mask_dir':  r"E:\月球_dataset\Research area\train\dataset_v7_512\mask",
-            'val_image_dir':   r"E:\月球_dataset\Research area\val\dataset_v7_512\image",
-            'val_mask_dir':    r"E:\月球_dataset\Research area\val\dataset_v7_512\mask",
-            'test_image_dir':  r"E:\月球_dataset\Research area\test\dataset_v7_512\image",
-            'test_mask_dir':   r"E:\月球_dataset\Research area\test\dataset_v7_512\mask",
+            'train_image_dir': r"E:\月球_dataset\Research area\train\dataset_v7\image",
+            'train_mask_dir':  r"E:\月球_dataset\Research area\train\dataset_v7\mask",
+            'val_image_dir':   r"E:\月球_dataset\Research area\val\dataset_v7\image",
+            'val_mask_dir':    r"E:\月球_dataset\Research area\val\dataset_v7\mask",
+            'test_image_dir':  r"E:\月球_dataset\Research area\test\dataset_v7\image",
+            'test_mask_dir':   r"E:\月球_dataset\Research area\test\dataset_v7\mask",
             'pretrain_dir':    None,  # 使用 swinv2unet.py 内置路径
             'record_path':     r'E:\月球_dataset\Research area\result',
             'train_valid_list': None,
@@ -638,11 +638,18 @@ def train(hp: HyperParameter):
         masks_dir=hp.train_mask_dir,
         valid_list_file=hp.train_valid_list,
     )
-    val_data = MyDataset(
-        images_dir=hp.val_image_dir,
-        masks_dir=hp.val_mask_dir,
-        valid_list_file=hp.val_valid_list,
-    )
+    val_data = None
+    if os.path.isdir(hp.val_image_dir) and os.path.isdir(hp.val_mask_dir):
+        val_data = MyDataset(
+            images_dir=hp.val_image_dir,
+            masks_dir=hp.val_mask_dir,
+            valid_list_file=hp.val_valid_list,
+        )
+    else:
+        print('[跳过] val 目录不存在, 不使用验证集')
+        import tempfile
+        _tmp = tempfile.mkdtemp()
+        val_data = MyDataset(_tmp, _tmp)
     test_data = MyDataset(
         images_dir=hp.test_image_dir,
         masks_dir=hp.test_mask_dir,
