@@ -35,10 +35,12 @@ terrain_channels: 4
 use_focal_loss: false
 
 # ---- 数据增强 ----
-use_scale_aug: false
+use_scale_aug: true
+scale_range: [0.9, 1.1]
 
 # ---- Tile 采样 ----
-use_tile_sampling: false
+use_tile_sampling: true
+tile_sample_exp: 0.3
 
 # ---- Early stopping ----
 early_stop: false

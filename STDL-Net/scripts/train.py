@@ -93,7 +93,7 @@ def detect_env():
             'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
             'pretrain_dir':    os.path.join(data_root, 'pretrain'),
             'record_path':     '/kaggle/working/result',
-            'train_valid_list': None,
+            'train_valid_list': train_list,
             'val_valid_list':   None,
             'test_valid_list':  None,
         }
