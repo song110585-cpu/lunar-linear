@@ -41,19 +41,6 @@ from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-
-def set_seed(seed: int):
-    """固定 Python / NumPy / PyTorch 随机种子, 保证可复现."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
-
 # ============================================================================
 # 环境检测
 # ============================================================================
@@ -63,13 +50,8 @@ def _generate_scene_split(image_dir):
 
     Val:  Mare Serenitatis 下半部 (rows >= 3684)
     Train: 其余所有 tile (含 Mare Serenitatis 上半部)
-
-    返回 (train_list, val_list): 两个 tile 文件名列表
     """
     import re
-    tiles = sorted(f for f in os.listdir(image_dir)
-                   if f.lower().endswith(('.tif', '.tiff')))
-
     SPLIT_ROW = 3684
     VAL_SCENE = 'Mare Serenitatis'
 
@@ -83,8 +65,8 @@ def _generate_scene_split(image_dir):
         if m: return m.group(1)
         return basename
 
-    train_tiles = []
-    val_tiles = []
+    tiles = sorted(f for f in os.listdir(image_dir) if f.lower().endswith(('.tif', '.tiff')))
+    train_tiles, val_tiles = [], []
     for t in tiles:
         scene = _extract_scene(t)
         if scene == VAL_SCENE:
@@ -96,7 +78,6 @@ def _generate_scene_split(image_dir):
                 train_tiles.append(t)
         else:
             train_tiles.append(t)
-
     return train_tiles, val_tiles
 
 
@@ -104,52 +85,43 @@ def detect_env():
     """自动检测 Kaggle vs 本地环境, 返回路径配置和预训练目录."""
     if os.path.isdir('/kaggle'):
         # ---- Kaggle 环境 ----
-        data_root_v8 = '/kaggle/input/datasets/changyasong/dataset8/datasetv8'
+        data_root_v8 = '/kaggle/input/datasets/changyasong/datasetv8/datasetv8'
         data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
 
         if os.path.isdir(data_root_v8):
             data_root = data_root_v8
             use_scene_split = True
-            print(f'[Env] 使用 dataset v8 (Scene Split): {data_root}')
+            print(f'[Env] v8 (Scene Split): {data_root}')
         elif os.path.isdir(data_root_v6):
             data_root = data_root_v6
             use_scene_split = False
-            print(f'[Env] 使用 dataset v6 (旧式 Split): {data_root}')
+            print(f'[Env] v6 (legacy split): {data_root}')
         else:
             data_root = data_root_v6
             use_scene_split = False
 
         def _find_valid_list(filename):
-            candidates = [
-                os.path.join(data_root, filename),
-                os.path.join(data_root, 'pretrain', filename),
-                os.path.join(os.path.dirname(data_root), filename),
-                os.path.join(os.path.dirname(os.path.dirname(data_root)), filename),
-            ]
-            for p in candidates:
-                if os.path.isfile(p):
-                    return p
+            for p in [os.path.join(data_root, filename),
+                      os.path.join(data_root, 'pretrain', filename),
+                      os.path.join(os.path.dirname(data_root), filename)]:
+                if os.path.isfile(p): return p
             return None
 
         if use_scene_split:
-            # v8: train/val 同目录, 通过 Scene Split 的 valid_list 区分
             train_list = _find_valid_list('valid_tiles_train_scene.txt')
             val_list   = _find_valid_list('valid_tiles_val_scene.txt')
-
             if train_list is None or val_list is None:
                 train_dir = os.path.join(data_root, 'train', 'image')
                 if os.path.isdir(train_dir):
-                    print('[Env] 未找到 split 文件, 运行时按 Scene 规则生成...')
+                    print('[Env] generating scene split from filename rules...')
                     train_tiles, val_tiles = _generate_scene_split(train_dir)
                     os.makedirs('/kaggle/working', exist_ok=True)
                     train_list = '/kaggle/working/valid_tiles_train_scene.txt'
                     val_list   = '/kaggle/working/valid_tiles_val_scene.txt'
-                    with open(train_list, 'w', encoding='utf-8') as f:
-                        for t in train_tiles: f.write(t + '\n')
-                    with open(val_list, 'w', encoding='utf-8') as f:
-                        for t in val_tiles: f.write(t + '\n')
-                    print(f'[Env] 生成 split: Train={len(train_tiles)}, Val={len(val_tiles)}')
-
+                    for path, tiles in [(train_list, train_tiles), (val_list, val_tiles)]:
+                        with open(path, 'w', encoding='utf-8') as f:
+                            for t in tiles: f.write(t + '\n')
+                    print(f'[Env] Train={len(train_tiles)}, Val={len(val_tiles)}')
             return {
                 'is_kaggle': True,
                 'train_image_dir': os.path.join(data_root, 'train', 'image'),
@@ -165,10 +137,8 @@ def detect_env():
                 'test_valid_list':  None,
             }
         else:
-            # v6: 独立 train/val 目录, 使用旧式 split 文件
             train_split = _find_valid_list('valid_tiles_train_split.txt')
             train_list = train_split if train_split else _find_valid_list('valid_tiles_train.txt')
-
             return {
                 'is_kaggle': True,
                 'train_image_dir': os.path.join(data_root, 'train', 'image'),
@@ -185,32 +155,30 @@ def detect_env():
             }
     else:
         # ---- 本地环境 (dataset_v8) ----
+        _data_root = r'E:\月球_dataset\dataset\datasetv8'
         _filter_dir = r'E:\月球_dataset\dataset\dataset_analysis'
-        _v8_train = r'E:\月球_dataset\dataset\train\dataset_v8'
-        _v8_test  = r'E:\月球_dataset\dataset\test\dataset_v8'
 
-        # 优先用预生成的 split 文件; 否则运行时生成
         train_list = os.path.join(_filter_dir, 'valid_tiles_train_scene.txt')
         val_list   = os.path.join(_filter_dir, 'valid_tiles_val_scene.txt')
 
         if not (os.path.isfile(train_list) and os.path.isfile(val_list)):
-            print('[Env] 未找到 split 文件, 运行时按 Scene 规则生成...')
-            train_tiles, val_tiles = _generate_scene_split(os.path.join(_v8_train, 'image'))
+            print('[Env] generating scene split from filename rules...')
+            train_tiles, val_tiles = _generate_scene_split(
+                os.path.join(_data_root, 'train', 'image'))
             os.makedirs(_filter_dir, exist_ok=True)
-            with open(train_list, 'w', encoding='utf-8') as f:
-                for t in train_tiles: f.write(t + '\n')
-            with open(val_list, 'w', encoding='utf-8') as f:
-                for t in val_tiles: f.write(t + '\n')
-            print(f'[Env] 生成 split: Train={len(train_tiles)}, Val={len(val_tiles)}')
+            for path, tiles in [(train_list, train_tiles), (val_list, val_tiles)]:
+                with open(path, 'w', encoding='utf-8') as f:
+                    for t in tiles: f.write(t + '\n')
+            print(f'[Env] Train={len(train_tiles)}, Val={len(val_tiles)}')
 
         return {
             'is_kaggle': False,
-            'train_image_dir': os.path.join(_v8_train, 'image'),
-            'train_mask_dir':  os.path.join(_v8_train, 'mask'),
-            'val_image_dir':   os.path.join(_v8_train, 'image'),   # 同目录, valid_list 区分
-            'val_mask_dir':    os.path.join(_v8_train, 'mask'),
-            'test_image_dir':  os.path.join(_v8_test, 'image'),
-            'test_mask_dir':   os.path.join(_v8_test, 'mask'),
+            'train_image_dir': os.path.join(_data_root, 'train', 'image'),
+            'train_mask_dir':  os.path.join(_data_root, 'train', 'mask'),
+            'val_image_dir':   os.path.join(_data_root, 'train', 'image'),
+            'val_mask_dir':    os.path.join(_data_root, 'train', 'mask'),
+            'test_image_dir':  os.path.join(_data_root, 'test', 'image'),
+            'test_mask_dir':   os.path.join(_data_root, 'test', 'mask'),
             'pretrain_dir':    None,
             'record_path':     r'E:\月球_dataset\dataset\result',
             'train_valid_list': train_list,
@@ -268,47 +236,29 @@ class HyperParameter:
         self.copypaste_p        = config.get('copypaste_p', 0.5)
         self.use_strip_pooling  = config.get('use_strip_pooling', False)
         self.use_coord_attention = config.get('use_coord_attention', False)
-        self.use_local_cnn      = config.get('use_local_cnn', False)
         self.use_boundary_loss  = config.get('use_boundary_loss', False)
-        self.boundary_loss_wt   = config.get('boundary_loss_weight', 0.5)
-        self.boundary_kernel    = config.get('boundary_kernel_size', 3)
         self.use_dem_guided     = config.get('use_dem_guided', True)
         self.terrain_channels   = config.get('terrain_channels', 4)
-        self.use_deep_supervision = config.get('use_deep_supervision', False)
-        self.deep_sup_weight    = config.get('deep_sup_weight', 0.3)
 
         # ---- 损失函数 ----
-        self.use_focal_loss   = config.get('use_focal_loss', False)
-        self.focal_gamma      = config.get('focal_gamma', 2.0)
-        self.use_fault_penalty = config.get('use_fault_penalty', False)
-        self.fault_dilate      = config.get('fault_dilate', 1)
-        self.fault_fp_weight   = config.get('fault_fp_weight', 0.1)
-        self.use_tversky_loss  = config.get('use_tversky_loss', False)
-        self.tversky_alpha     = config.get('tversky_alpha', 0.7)  # FP 惩罚
-        self.tversky_beta      = config.get('tversky_beta',  0.3)  # FN 惩罚
+        self.use_focal_loss = config.get('use_focal_loss', False)
+        self.focal_gamma    = config.get('focal_gamma', 2.0)
 
         # ---- 优化器正则 ----
         self.weight_decay   = config.get('weight_decay', 0.01)
         self.grad_clip_norm = config.get('grad_clip_norm', 0.0)
 
-        # ---- 随机种子 (None=不固定, 沿用默认行为) ----
-        self.seed = config.get('seed', None)
-
         # ---- 数据增强 ----
         self.use_scale_aug = config.get('use_scale_aug', False)
         self.scale_range   = config.get('scale_range', [0.8, 1.2])
-
-        # ---- Tile 采样 ----
-        self.use_tile_sampling = config.get('use_tile_sampling', False)
-        self.tile_sample_exp  = config.get('tile_sample_exp', 0.5)  # 前景占比指数, 越低≈采样越均匀
 
         # ---- Early stopping ----
         self.early_stop = config.get('early_stop', True)
         self.patience   = config.get('patience', 12)
 
         # ---- 导出开关 ----
+        self.save_val_on_best  = config.get('save_val_on_best', True)
         self.save_all_test_on_best = config.get('save_all_test_on_best', True)
-        self.save_val_on_best     = config.get('save_val_on_best', False)
         self.save_pred_mask_png    = config.get('save_pred_mask_png', True)
         self.save_pred_vis_png     = config.get('save_pred_vis_png', True)
 
@@ -318,8 +268,6 @@ class HyperParameter:
         # ---- 数据路径 ----
         self.train_image_dir = env['train_image_dir']
         self.train_mask_dir  = env['train_mask_dir']
-        self.val_image_dir   = env.get('val_image_dir', env['train_image_dir'])
-        self.val_mask_dir    = env.get('val_mask_dir', env['train_mask_dir'])
         self.test_image_dir  = env['test_image_dir']
         self.test_mask_dir   = env['test_mask_dir']
 
@@ -513,84 +461,74 @@ class FocalLoss(nn.Module):
         return focal.sum()
 
 
-def dice_loss(logits, targets, smooth=1.0, fault_dilate=0):
-    """前景类 Dice Loss. fault_dilate>0 时对 Fault GT 做膨胀, 宽容边界误差."""
+def dice_loss(logits, targets, smooth=1.0):
     probs = torch.softmax(logits, dim=1)
     dice = 0.0
     for c in range(1, logits.shape[1]):
         p = probs[:, c]
         g = (targets == c).float()
-        if c == 3 and fault_dilate > 0:  # Fault GT 膨胀 r=1→kernel=3
-            k = fault_dilate * 2 + 1
-            g = F.max_pool2d(g.unsqueeze(1), kernel_size=k, stride=1,
-                             padding=fault_dilate).squeeze(1)
         inter = (p * g).sum(dim=(1, 2))
         union = p.sum(dim=(1, 2)) + g.sum(dim=(1, 2))
         dice += (1 - (2 * inter + smooth) / (union + smooth)).mean()
     return dice / (logits.shape[1] - 1)
 
 
-def tversky_loss(logits, targets, alpha=0.7, beta=0.3, smooth=1.0):
-    """Tversky 损失: 用 α/β 独立控制 FP 和 FN 惩罚.
-    α > β → 更重罚 FP → 提升 Precision; β > α → 更重罚 FN → 提升 Recall.
-    """
-    probs = torch.softmax(logits, dim=1)
-    loss = 0.0
-    for c in range(1, logits.shape[1]):
-        p = probs[:, c]
-        g = (targets == c).float()
-        tp = (p * g).sum(dim=(1, 2))
-        fp = (p * (1 - g)).sum(dim=(1, 2))
-        fn = ((1 - p) * g).sum(dim=(1, 2))
-        ti = (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        loss += (1 - ti).mean()
-    return loss / (logits.shape[1] - 1)
-
-
-def fault_fp_penalty(logits, targets, dilate=2):
-    """惩罚膨胀 GT 区域外的 Fault 预测 — 直接打击假阳性噪点."""
-    probs = torch.softmax(logits, dim=1)
-    fault_prob = probs[:, 3]  # Fault channel
-    gt_fault = (targets == 3).float()
-    # 生成"宽容区域": Fault GT 膨胀后, 几乎不可能漏检
-    k = dilate * 2 + 1
-    dilated_gt = F.max_pool2d(gt_fault.unsqueeze(1), kernel_size=k, stride=1,
-                              padding=dilate).squeeze(1)
-    # 膨胀区外的一切 Fault 预测 = 假阳性, 直接惩罚
-    outside = (1.0 - dilated_gt) * fault_prob
-    return outside.mean()
-
-
-def boundary_loss(logits, targets, kernel_size=3):
-    """边界监督损失: GT 边缘像素额外加权 CE, 强制边界清晰."""
-    # 提取 GT 边界: |dilate - erode|
-    k = kernel_size * 2 + 1  # 3→7
-    pad = kernel_size
-    gt_onehot = F.one_hot(targets, num_classes=logits.shape[1]).permute(0, 3, 1, 2).float()
-    dilated = F.max_pool2d(gt_onehot, kernel_size=k, stride=1, padding=pad)
-    eroded = -F.max_pool2d(-gt_onehot, kernel_size=k, stride=1, padding=pad)
-    bound = (dilated - eroded).clamp(0, 1)  # [B, C, H, W], 边界=1
-    bound_mask = bound.sum(dim=1).clamp(0, 1)  # [B, H, W], 任一类别的边界
-
-    # 边界像素 CE
-    ce = F.cross_entropy(logits, targets, reduction='none')  # [B, H, W]
-    bound_ce = (ce * bound_mask).sum() / (bound_mask.sum() + 1e-6)
-    return bound_ce
-
-
-def combined_loss(criterion, logits, targets, fault_dilate=0, fault_fp_weight=0.0,
-                  use_tversky=False, tversky_alpha=0.7, tversky_beta=0.3):
-    dice_fn = (lambda l, t: tversky_loss(l, t, tversky_alpha, tversky_beta)) if use_tversky \
-              else (lambda l, t: dice_loss(l, t, fault_dilate=fault_dilate))
-    total = criterion(logits, targets) + 0.5 * dice_fn(logits, targets)
-    if fault_fp_weight > 0:
-        total = total + fault_fp_weight * fault_fp_penalty(logits, targets, dilate=fault_dilate)
-    return total
+def combined_loss(criterion, logits, targets):
+    return criterion(logits, targets) + 0.5 * dice_loss(logits, targets)
 
 
 # ============================================================================
 # 导出 & 可视化
 # ============================================================================
+
+def export_all_val(model, data_iter, save_root, epoch, num_classes, device,
+                  use_cuda=True, save_mask=True, save_vis=True):
+    if not save_mask and not save_vis:
+        return
+
+    mask_dir = os.path.join(save_root, 'pred_mask')
+    vis_dir  = os.path.join(save_root, 'pred_vis')
+    if save_mask:
+        os.makedirs(mask_dir, exist_ok=True)
+    if save_vis:
+        os.makedirs(vis_dir, exist_ok=True)
+
+    amp_ctx = torch.amp.autocast('cuda') if use_cuda else nullcontext()
+
+    model.eval()
+    with torch.no_grad(), amp_ctx:
+        for img, label, name in tqdm(data_iter, desc=f'Export@E{epoch}', unit='img'):
+            img, label = img.to(device), label.to(device)
+            pred = model(img).argmax(dim=1)
+
+            pred_np = pred[0].cpu().numpy().astype(np.uint8)
+            gt_np   = label[0].cpu().numpy().astype(np.uint8)
+            stem    = name[0]
+
+            if save_mask:
+                Image.fromarray(pred_np, mode='L').save(
+                    os.path.join(mask_dir, f'{stem}.png'))
+
+            if save_vis:
+                x = img[0].cpu().numpy()
+                wac = x[0] * CHANNEL_STD[0] + CHANNEL_MEAN[0]
+                wac = np.clip(wac, 0, 1)
+
+                fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+                axes[0].imshow(wac, cmap='gray');          axes[0].set_title(f'WAC - {stem}', fontsize=8)
+                axes[1].imshow(mask_to_color(gt_np));      axes[1].set_title('GT')
+                axes[2].imshow(mask_to_color(pred_np));    axes[2].set_title('Pred')
+                axes[3].imshow(error_map(gt_np, pred_np)); axes[3].set_title('Error(G=TP,R=FN,O=FP)')
+                for ax in axes:
+                    ax.axis('off')
+                plt.tight_layout()
+                plt.savefig(os.path.join(vis_dir, f'{stem}.png'), dpi=120)
+                plt.close(fig)
+
+    saved_mask = len(os.listdir(mask_dir)) if save_mask else 0
+    saved_vis = len(os.listdir(vis_dir)) if save_vis else 0
+    print(f'已导出 {saved_mask} 张 pred_mask + {saved_vis} 张 pred_vis 到 {save_root}')
+
 
 def export_all_test(model, test_iter, save_root, epoch, num_classes, device, use_cuda=True):
     mask_dir = os.path.join(save_root, 'pred_mask')
@@ -604,8 +542,7 @@ def export_all_test(model, test_iter, save_root, epoch, num_classes, device, use
     with torch.no_grad(), amp_ctx:
         for img, label, name in tqdm(test_iter, desc=f'Export@E{epoch}', unit='img'):
             img, label = img.to(device), label.to(device)
-            out = model(img)
-            pred = (out[0] if isinstance(out, tuple) else out).argmax(dim=1)
+            pred = model(img).argmax(dim=1)
 
             pred_np = pred[0].cpu().numpy().astype(np.uint8)
             gt_np   = label[0].cpu().numpy().astype(np.uint8)
@@ -707,13 +644,9 @@ def train(hp: HyperParameter):
         model_kwargs['use_strip_pooling'] = True
     if 'use_coord_attention' in init_params and hp.use_coord_attention:
         model_kwargs['use_coord_attention'] = True
-    if 'use_local_cnn' in init_params and hp.use_local_cnn:
-        model_kwargs['use_local_cnn'] = True
     if 'use_dem_guided' in init_params and hp.use_dem_guided:
         model_kwargs['use_dem_guided'] = True
         model_kwargs['terrain_channels'] = hp.terrain_channels
-    if 'use_deep_supervision' in init_params and hp.use_deep_supervision:
-        model_kwargs['use_deep_supervision'] = True
 
     if hp.use_dem_guided and 'use_dem_guided' not in init_params:
         raise RuntimeError(
@@ -739,18 +672,11 @@ def train(hp: HyperParameter):
         masks_dir=hp.train_mask_dir,
         valid_list_file=hp.train_valid_list,
     )
-    val_data = None
-    if os.path.isdir(hp.val_image_dir) and os.path.isdir(hp.val_mask_dir):
-        val_data = MyDataset(
-            images_dir=hp.val_image_dir,
-            masks_dir=hp.val_mask_dir,
-            valid_list_file=hp.val_valid_list,
-        )
-    else:
-        print('[跳过] val 目录不存在, 不使用验证集')
-        import tempfile
-        _tmp = tempfile.mkdtemp()
-        val_data = MyDataset(_tmp, _tmp)
+    val_data = MyDataset(
+        images_dir=hp.train_image_dir,
+        masks_dir=hp.train_mask_dir,
+        valid_list_file=hp.val_valid_list,
+    )
     test_data = MyDataset(
         images_dir=hp.test_image_dir,
         masks_dir=hp.test_mask_dir,
@@ -771,24 +697,7 @@ def train(hp: HyperParameter):
     else:
         train_data = train_data_raw
 
-    # ---- Tile 加权采样 ----
-    train_sampler = None
-    if hp.use_tile_sampling:
-        from torch.utils.data import WeightedRandomSampler
-        print('Pre-computing tile sampling weights...')
-        tile_weights = []
-        for i in tqdm(range(len(train_data_raw)), desc='Computing weights'):
-            _, mask, _ = train_data_raw[i]
-            fg_ratio = (mask > 0).float().mean().item()
-            tile_weights.append(fg_ratio ** hp.tile_sample_exp + 0.01)
-        train_sampler = WeightedRandomSampler(
-            tile_weights, num_samples=len(train_data_raw), replacement=True)
-        avg_w = np.mean(tile_weights)
-        print(f'Tile 加权采样: weights avg={avg_w:.4f}, min={min(tile_weights):.4f}, '
-              f'max={max(tile_weights):.4f}')
-
-    train_iter = DataLoader(train_data, batch_size=hp.batch_size,
-                            sampler=train_sampler,
+    train_iter = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True,
                             num_workers=2 if use_cuda else 0,
                             pin_memory=use_cuda, drop_last=True)
     val_iter   = DataLoader(val_data,   batch_size=1, shuffle=False,
@@ -806,28 +715,13 @@ def train(hp: HyperParameter):
     print(f'Class weights: {class_weights.tolist()}')
     if hp.use_focal_loss:
         criterion = FocalLoss(alpha=class_weights, gamma=hp.focal_gamma)
-        loss_base = f'Focal(γ={hp.focal_gamma})'
+        print(f'Loss: Focal(γ={hp.focal_gamma}) + 0.5*Dice')
     else:
         criterion = nn.CrossEntropyLoss(weight=class_weights)
-        loss_base = 'CE'
-    extras = []
-    if hp.use_fault_penalty:
-        extras.append(f'FaultPen(dilate={hp.fault_dilate},w={hp.fault_fp_weight})')
-    print(f'Loss: {loss_base} + 0.5*Dice' + (' + ' + ' + '.join(extras) if extras else ''))
+        print(f'Loss: CE + 0.5*Dice')
 
-    def loss_fn(logits, targets, aux_logits=None):
-        loss = combined_loss(criterion, logits, targets,
-                             fault_dilate=hp.fault_dilate if hp.use_fault_penalty else 0,
-                             fault_fp_weight=hp.fault_fp_weight if hp.use_fault_penalty else 0.0,
-                             use_tversky=hp.use_tversky_loss,
-                             tversky_alpha=hp.tversky_alpha,
-                             tversky_beta=hp.tversky_beta)
-        if hp.use_boundary_loss:
-            loss = loss + hp.boundary_loss_wt * boundary_loss(logits, targets, hp.boundary_kernel)
-        if aux_logits is not None:
-            aux_loss = sum(criterion(a, targets) for a in aux_logits) / len(aux_logits)
-            loss = loss + hp.deep_sup_weight * aux_loss
-        return loss
+    def loss_fn(logits, targets):
+        return combined_loss(criterion, logits, targets)
 
     # ---- 优化器 & 调度器 ----
     optimizer = optim.AdamW(
@@ -875,12 +769,8 @@ def train(hp: HyperParameter):
             img, label = img.to(device), label.to(device)
 
             with amp_ctx:
-                out = model(img)
-                if isinstance(out, tuple):
-                    logits, aux_logits = out
-                else:
-                    logits, aux_logits = out, None
-                l = loss_fn(logits, label, aux_logits) / hp.accum_steps
+                logits = model(img)
+                l = loss_fn(logits, label) / hp.accum_steps
 
             if scaler is not None:
                 scaler.scale(l).backward()
@@ -923,8 +813,7 @@ def train(hp: HyperParameter):
                 if hp.max_steps > 0 and len(val_losses) >= hp.max_steps:
                     break
                 img, label = img.to(device), label.to(device)
-                out = model(img)
-                logits = out[0] if isinstance(out, tuple) else out
+                logits = model(img)
                 val_losses.append(loss_fn(logits, label).item())
                 pred = logits.argmax(dim=1)
                 val_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
@@ -965,12 +854,22 @@ def train(hp: HyperParameter):
             torch.save(model.state_dict(),
                        os.path.join(hp.result_dir, f'best_{hp.model_size}.pth'))
             print(f'>>> Best model saved on Val mIoU! val_mIoU={best_miou:.4f}')
-
-            # 导出验证集预测图 (如果开启)
             if hp.save_val_on_best:
-                val_export_dir = os.path.join(hp.result_dir,
-                    f'best_epoch_{epoch:02d}_val_miou_{best_miou:.4f}')
-                export_all_test(model, val_iter, val_export_dir, epoch, hp.num_classes, device, use_cuda=use_cuda)
+                if best_export_dir and os.path.isdir(best_export_dir):
+                    shutil.rmtree(best_export_dir, ignore_errors=True)
+                best_export_dir = os.path.join(hp.result_dir,
+                                                f'best_epoch_{epoch:02d}_miou_{best_miou:.4f}')
+                export_all_val(
+                    model,
+                    val_iter,
+                    best_export_dir,
+                    epoch,
+                    hp.num_classes,
+                    device,
+                    use_cuda=use_cuda,
+                    save_mask=hp.save_pred_mask_png,
+                    save_vis=hp.save_pred_vis_png,
+                )
         else:
             no_improve_count += 1
             print(f'  No improvement on Val ({no_improve_count}/{hp.payout if hasattr(hp, "payout") else hp.patience})')
@@ -1016,8 +915,7 @@ def train(hp: HyperParameter):
         with torch.no_grad(), amp_ctx:
             for img, label, name in tqdm(test_iter, desc='Final Test Evaluation', unit='img'):
                 img, label = img.to(device), label.to(device)
-                out = model(img)
-                logits = out[0] if isinstance(out, tuple) else out
+                logits = model(img)
                 test_losses.append(loss_fn(logits, label).item())
                 pred = logits.argmax(dim=1)
                 test_hist += metrics.multiclass_confusion(pred, label, hp.num_classes).double()
@@ -1048,18 +946,11 @@ def train(hp: HyperParameter):
         import zipfile
         zip_path = '/kaggle/working/result.zip'
         print(f'打包结果: {zip_path} ...')
-        skip_count = 0
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, dirs, files in os.walk(hp.result_dir):
                 for f in files:
-                    # 跳过所有 checkpoint (best_small.pth 已包含最佳权重, optimizer 状态无用)
-                    if f.startswith('ckpt_') and f.endswith('.pth'):
-                        skip_count += 1
-                        continue
                     fpath = os.path.join(root, f)
                     zf.write(fpath, os.path.relpath(fpath, '/kaggle/working'))
-        if skip_count:
-            print(f'  跳过 {skip_count} 个 checkpoint')
         zip_size = os.path.getsize(zip_path) / 1024 / 1024
         print(f'打包完成: {zip_path} ({zip_size:.1f} MB)')
 
@@ -1081,12 +972,6 @@ if __name__ == '__main__':
     env = detect_env()
     hp = HyperParameter(env, config=args.config)
 
-    if hp.seed is not None:
-        set_seed(hp.seed)
-        print(f'Seed: {hp.seed} (deterministic mode)')
-    else:
-        print('Seed: not fixed (default non-deterministic behavior)')
-
     print(f'Environment: {"Kaggle" if hp.is_kaggle else "Local"}')
     print(f'Data: {hp.train_image_dir}')
     if hp.train_valid_list:
@@ -1097,14 +982,11 @@ if __name__ == '__main__':
           f'LR: {hp.learning_rate}')
     print(f'Freeze stages: {hp.freeze_stages}')
     loss_name = f'Focal(γ={hp.focal_gamma})' if hp.use_focal_loss else 'CE'
-    dice_name = f'Tversky(α={hp.tversky_alpha},β={hp.tversky_beta})' if hp.use_tversky_loss else 'Dice'
     clip_str = hp.grad_clip_norm if hp.grad_clip_norm > 0 else 'off'
-    print(f'Loss: {loss_name} + 0.5*{dice_name}, wd={hp.weight_decay}, clip={clip_str}')
-    print(f'Aug: {hp.use_augment}, Scale: {hp.use_scale_aug} ({hp.scale_range}), CopyPaste: {hp.use_copypaste} (p={hp.copypaste_p}), TileSample: {hp.use_tile_sampling}')
+    print(f'Loss: {loss_name} + 0.5*Dice, wd={hp.weight_decay}, clip={clip_str}')
+    print(f'Aug: {hp.use_augment}, Scale: {hp.use_scale_aug} ({hp.scale_range}), CopyPaste: {hp.use_copypaste} (p={hp.copypaste_p})')
     print(f'Modules: StripPool={hp.use_strip_pooling}, CoordAttn={hp.use_coord_attention}, '
-          f'LocalCNN={hp.use_local_cnn}, '
-          f'BoundaryLoss={hp.use_boundary_loss}, DeepSup={hp.use_deep_supervision}, '
-          f'DEM-Guided={hp.use_dem_guided} '
+          f'BoundaryLoss={hp.use_boundary_loss}, DEM-Guided={hp.use_dem_guided} '
           f'(terrain={hp.terrain_channels})')
     print(f'EarlyStop: {hp.early_stop} (patience={hp.patience})')
     print(f'Result dir: {hp.result_dir}')

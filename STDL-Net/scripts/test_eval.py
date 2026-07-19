@@ -19,7 +19,7 @@ from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 import metrics
 
 # 默认本地 v8 路径
-_DEFAULT_DATA = r"E:\月球_dataset\dataset"
+_DEFAULT_DATA = r"E:\月球_dataset\dataset\datasetv8"
 
 
 def main():
@@ -34,18 +34,15 @@ def main():
     args = parser.parse_args()
 
     data_dir = args.data_dir or _DEFAULT_DATA
-    v8_train = os.path.join(data_dir, 'train', 'dataset_v8')
-    v8_test  = os.path.join(data_dir, 'test', 'dataset_v8')
 
     if args.split == 'val':
-        IMG_DIR = os.path.join(v8_train, 'image')
-        MASK_DIR = os.path.join(v8_train, 'mask')
-        VALID_LIST = args.val_list or os.path.join(
-            data_dir, 'dataset_analysis', 'valid_tiles_val_scene.txt')
+        IMG_DIR = os.path.join(data_dir, 'train', 'image')
+        MASK_DIR = os.path.join(data_dir, 'train', 'mask')
+        VALID_LIST = args.val_list or r'E:\月球_dataset\dataset\dataset_analysis\valid_tiles_val_scene.txt'
         LABEL = '验证集成绩 (Val - Mare Serenitatis 下半部)'
     else:
-        IMG_DIR = os.path.join(v8_test, 'image')
-        MASK_DIR = os.path.join(v8_test, 'mask')
+        IMG_DIR = os.path.join(data_dir, 'test', 'image')
+        MASK_DIR = os.path.join(data_dir, 'test', 'mask')
         VALID_LIST = None
         LABEL = '独立测试集成绩 (Test Set Evaluation)'
 

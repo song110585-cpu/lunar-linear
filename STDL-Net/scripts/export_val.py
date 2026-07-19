@@ -1,6 +1,6 @@
 """
 用 best_small.pth 对验证集做推理，生成 pred_mask PNG。
-用法:python STDL-Net/scripts/export_val.py "E:\月球_dataset\output\result43\result-2"
+用法:python STDL-Net/scripts/export_val.py "E:\月球_dataset\output\result43\result-4"
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
