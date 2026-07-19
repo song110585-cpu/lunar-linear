@@ -1,4 +1,4 @@
-"""
+r"""
 用 best checkpoint 对独立测试集做评估，打印 mIoU 等指标。
 用法: python STDL-Net/scripts/test_eval.py 'E:\月球_dataset\output\result33\result\result'
 """
@@ -18,11 +18,8 @@ from MyDataset import MyDataset
 from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 import metrics
 
-VAL_LIST = r"E:\月球_dataset\Research area\dataset_analysis\valid_tiles_test.txt"
-VAL_IMG_DIR = r"E:\月球_dataset\Research area\val\dataset\image"
-VAL_MASK_DIR = r"E:\月球_dataset\Research area\val\dataset\mask"
-TEST_IMG_DIR = r"E:\月球_dataset\Research area\test\dataset\image"
-TEST_MASK_DIR = r"E:\月球_dataset\Research area\test\dataset\mask"
+# 默认本地 v8 路径
+_DEFAULT_DATA = r"E:\月球_dataset\dataset"
 
 
 def main():
@@ -30,15 +27,26 @@ def main():
     parser.add_argument('result_dir', help='结果目录路径 (递归搜索 best_*.pth)')
     parser.add_argument('--split', choices=['test', 'val'], default='test',
                         help='评估哪个集合 (default: test)')
+    parser.add_argument('--data-dir', default=None,
+                        help=f'数据集根目录 (default: {_DEFAULT_DATA})')
+    parser.add_argument('--val-list', default=None,
+                        help='val 的 valid_list 文件 (仅 --split val 时使用)')
     args = parser.parse_args()
 
+    data_dir = args.data_dir or _DEFAULT_DATA
+    v8_train = os.path.join(data_dir, 'train', 'dataset_v8')
+    v8_test  = os.path.join(data_dir, 'test', 'dataset_v8')
+
     if args.split == 'val':
-        IMG_DIR = VAL_IMG_DIR
-        MASK_DIR = VAL_MASK_DIR
-        LABEL = '验证集成绩 (Val Set - 独立区域)'
+        IMG_DIR = os.path.join(v8_train, 'image')
+        MASK_DIR = os.path.join(v8_train, 'mask')
+        VALID_LIST = args.val_list or os.path.join(
+            data_dir, 'dataset_analysis', 'valid_tiles_val_scene.txt')
+        LABEL = '验证集成绩 (Val - Mare Serenitatis 下半部)'
     else:
-        IMG_DIR = TEST_IMG_DIR
-        MASK_DIR = TEST_MASK_DIR
+        IMG_DIR = os.path.join(v8_test, 'image')
+        MASK_DIR = os.path.join(v8_test, 'mask')
+        VALID_LIST = None
         LABEL = '独立测试集成绩 (Test Set Evaluation)'
 
     # 找最新的 best checkpoint
@@ -89,7 +97,7 @@ def main():
     model.eval()
 
     # 加载数据集
-    eval_data = MyDataset(IMG_DIR, MASK_DIR)
+    eval_data = MyDataset(IMG_DIR, MASK_DIR, valid_list_file=VALID_LIST)
     eval_iter = DataLoader(eval_data, batch_size=1, shuffle=False, num_workers=0)
     print(f'{args.split} set: {len(eval_data)} tiles')
 

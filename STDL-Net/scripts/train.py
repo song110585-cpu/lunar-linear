@@ -58,16 +58,67 @@ def set_seed(seed: int):
 # 环境检测
 # ============================================================================
 
+def _generate_scene_split(image_dir):
+    """根据文件名规则生成 Scene-Level train/val split (纯规则, 无需读mask).
+
+    Val:  Mare Serenitatis 下半部 (rows >= 3684)
+    Train: 其余所有 tile (含 Mare Serenitatis 上半部)
+
+    返回 (train_list, val_list): 两个 tile 文件名列表
+    """
+    import re
+    tiles = sorted(f for f in os.listdir(image_dir)
+                   if f.lower().endswith(('.tif', '.tiff')))
+
+    SPLIT_ROW = 3684
+    VAL_SCENE = 'Mare Serenitatis'
+
+    def _extract_scene(fname):
+        basename = fname.replace('.tif', '').replace('.tiff', '')
+        m = re.match(r'^(.+?)_5ch_', basename)
+        if m: return m.group(1)
+        m = re.match(r'^train_(.+?)_r\d+', basename)
+        if m: return m.group(1)
+        m = re.match(r'^(?:train_)?(.+?)_r\d+', basename)
+        if m: return m.group(1)
+        return basename
+
+    train_tiles = []
+    val_tiles = []
+    for t in tiles:
+        scene = _extract_scene(t)
+        if scene == VAL_SCENE:
+            m = re.search(r'_r(\d+)_', t)
+            r = int(m.group(1)) if m else 0
+            if r >= SPLIT_ROW:
+                val_tiles.append(t)
+            else:
+                train_tiles.append(t)
+        else:
+            train_tiles.append(t)
+
+    return train_tiles, val_tiles
+
+
 def detect_env():
     """自动检测 Kaggle vs 本地环境, 返回路径配置和预训练目录."""
     if os.path.isdir('/kaggle'):
         # ---- Kaggle 环境 ----
-        # 优先使用最新的 dataset
-        data_root = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
-        # if not os.path.isdir(data_root):
-        #     data_root = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
+        data_root_v8 = '/kaggle/input/datasets/changyasong/dataset8/datasetv8'
+        data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
 
-        # 自动查找 valid_tiles_*.txt: 优先 dataset 根目录, 然后逐级向上找
+        if os.path.isdir(data_root_v8):
+            data_root = data_root_v8
+            use_scene_split = True
+            print(f'[Env] 使用 dataset v8 (Scene Split): {data_root}')
+        elif os.path.isdir(data_root_v6):
+            data_root = data_root_v6
+            use_scene_split = False
+            print(f'[Env] 使用 dataset v6 (旧式 Split): {data_root}')
+        else:
+            data_root = data_root_v6
+            use_scene_split = False
+
         def _find_valid_list(filename):
             candidates = [
                 os.path.join(data_root, filename),
@@ -80,40 +131,90 @@ def detect_env():
                     return p
             return None
 
-        train_split = _find_valid_list('valid_tiles_train_split.txt')
-        train_list = train_split if train_split else _find_valid_list('valid_tiles_train.txt')
+        if use_scene_split:
+            # v8: train/val 同目录, 通过 Scene Split 的 valid_list 区分
+            train_list = _find_valid_list('valid_tiles_train_scene.txt')
+            val_list   = _find_valid_list('valid_tiles_val_scene.txt')
+
+            if train_list is None or val_list is None:
+                train_dir = os.path.join(data_root, 'train', 'image')
+                if os.path.isdir(train_dir):
+                    print('[Env] 未找到 split 文件, 运行时按 Scene 规则生成...')
+                    train_tiles, val_tiles = _generate_scene_split(train_dir)
+                    os.makedirs('/kaggle/working', exist_ok=True)
+                    train_list = '/kaggle/working/valid_tiles_train_scene.txt'
+                    val_list   = '/kaggle/working/valid_tiles_val_scene.txt'
+                    with open(train_list, 'w', encoding='utf-8') as f:
+                        for t in train_tiles: f.write(t + '\n')
+                    with open(val_list, 'w', encoding='utf-8') as f:
+                        for t in val_tiles: f.write(t + '\n')
+                    print(f'[Env] 生成 split: Train={len(train_tiles)}, Val={len(val_tiles)}')
+
+            return {
+                'is_kaggle': True,
+                'train_image_dir': os.path.join(data_root, 'train', 'image'),
+                'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+                'val_image_dir':   os.path.join(data_root, 'train', 'image'),
+                'val_mask_dir':    os.path.join(data_root, 'train', 'mask'),
+                'test_image_dir':  os.path.join(data_root, 'test', 'image'),
+                'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
+                'pretrain_dir':    os.path.join(data_root, 'pretrain'),
+                'record_path':     '/kaggle/working/result',
+                'train_valid_list': train_list,
+                'val_valid_list':   val_list,
+                'test_valid_list':  None,
+            }
+        else:
+            # v6: 独立 train/val 目录, 使用旧式 split 文件
+            train_split = _find_valid_list('valid_tiles_train_split.txt')
+            train_list = train_split if train_split else _find_valid_list('valid_tiles_train.txt')
+
+            return {
+                'is_kaggle': True,
+                'train_image_dir': os.path.join(data_root, 'train', 'image'),
+                'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+                'val_image_dir':   os.path.join(data_root, 'val', 'image'),
+                'val_mask_dir':    os.path.join(data_root, 'val', 'mask'),
+                'test_image_dir':  os.path.join(data_root, 'test', 'image'),
+                'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
+                'pretrain_dir':    os.path.join(data_root, 'pretrain'),
+                'record_path':     '/kaggle/working/result',
+                'train_valid_list': train_list,
+                'val_valid_list':   None,
+                'test_valid_list':  None,
+            }
+    else:
+        # ---- 本地环境 (dataset_v8) ----
+        _filter_dir = r'E:\月球_dataset\dataset\dataset_analysis'
+        _v8_train = r'E:\月球_dataset\dataset\train\dataset_v8'
+        _v8_test  = r'E:\月球_dataset\dataset\test\dataset_v8'
+
+        # 优先用预生成的 split 文件; 否则运行时生成
+        train_list = os.path.join(_filter_dir, 'valid_tiles_train_scene.txt')
+        val_list   = os.path.join(_filter_dir, 'valid_tiles_val_scene.txt')
+
+        if not (os.path.isfile(train_list) and os.path.isfile(val_list)):
+            print('[Env] 未找到 split 文件, 运行时按 Scene 规则生成...')
+            train_tiles, val_tiles = _generate_scene_split(os.path.join(_v8_train, 'image'))
+            os.makedirs(_filter_dir, exist_ok=True)
+            with open(train_list, 'w', encoding='utf-8') as f:
+                for t in train_tiles: f.write(t + '\n')
+            with open(val_list, 'w', encoding='utf-8') as f:
+                for t in val_tiles: f.write(t + '\n')
+            print(f'[Env] 生成 split: Train={len(train_tiles)}, Val={len(val_tiles)}')
 
         return {
-            'is_kaggle': True,
-            'train_image_dir': os.path.join(data_root, 'train', 'image'),
-            'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
-            'val_image_dir':   os.path.join(data_root, 'val', 'image'),
-            'val_mask_dir':    os.path.join(data_root, 'val', 'mask'),
-            'test_image_dir':  os.path.join(data_root, 'test', 'image'),
-            'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
-            'pretrain_dir':    os.path.join(data_root, 'pretrain'),
-            'record_path':     '/kaggle/working/result',
-            'train_valid_list': train_list,
-            'val_valid_list':   None,
-            'test_valid_list':  None,
-        }
-    else:
-        # ---- 本地环境 ----
-        _filter_dir = r'E:\月球_dataset\Research area\dataset_analysis'
-        train_split = os.path.join(_filter_dir, 'valid_tiles_train_split.txt')
-        train_list = train_split if os.path.isfile(train_split) else os.path.join(_filter_dir, 'valid_tiles_train.txt')
-        return {
             'is_kaggle': False,
-            'train_image_dir': r"E:\月球_dataset\Research area\train\dataset_v7\image",
-            'train_mask_dir':  r"E:\月球_dataset\Research area\train\dataset_v7\mask",
-            'val_image_dir':   r"E:\月球_dataset\Research area\val\dataset_v7\image",
-            'val_mask_dir':    r"E:\月球_dataset\Research area\val\dataset_v7\mask",
-            'test_image_dir':  r"E:\月球_dataset\Research area\test\dataset_v7\image",
-            'test_mask_dir':   r"E:\月球_dataset\Research area\test\dataset_v7\mask",
-            'pretrain_dir':    None,  # 使用 swinv2unet.py 内置路径
-            'record_path':     r'E:\月球_dataset\Research area\result',
-            'train_valid_list': None,
-            'val_valid_list':   None,
+            'train_image_dir': os.path.join(_v8_train, 'image'),
+            'train_mask_dir':  os.path.join(_v8_train, 'mask'),
+            'val_image_dir':   os.path.join(_v8_train, 'image'),   # 同目录, valid_list 区分
+            'val_mask_dir':    os.path.join(_v8_train, 'mask'),
+            'test_image_dir':  os.path.join(_v8_test, 'image'),
+            'test_mask_dir':   os.path.join(_v8_test, 'mask'),
+            'pretrain_dir':    None,
+            'record_path':     r'E:\月球_dataset\dataset\result',
+            'train_valid_list': train_list,
+            'val_valid_list':   val_list,
             'test_valid_list':  None,
         }
 
