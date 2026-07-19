@@ -48,11 +48,12 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 def _generate_scene_split(image_dir):
     """根据文件名规则生成 Scene-Level train/val split (纯规则, 无需读mask).
 
-    Val:  Mare Serenitatis 下半部 (rows >= 3684)
-    Train: 其余所有 tile (含 Mare Serenitatis 上半部)
+    Val:   Mare Serenitatis 低行号 (rows < 6447, WR 丰富)
+    Train: Mare Serenitatis 高行号 (rows >= 6447, Graben 丰富) + 其余所有 Scene
     """
     import re
-    SPLIT_ROW = 3684
+    # 新切分: 行 >= 6447 → Train (Graben 丰富), 行 < 6447 → Val (WR 丰富)
+    SPLIT_ROW = 6447
     VAL_SCENE = 'Mare Serenitatis'
 
     def _extract_scene(fname):
@@ -72,10 +73,10 @@ def _generate_scene_split(image_dir):
         if scene == VAL_SCENE:
             m = re.search(r'_r(\d+)_', t)
             r = int(m.group(1)) if m else 0
-            if r >= SPLIT_ROW:
-                val_tiles.append(t)
+            if r < SPLIT_ROW:
+                val_tiles.append(t)   # 低行号 → Val (WR 丰富)
             else:
-                train_tiles.append(t)
+                train_tiles.append(t)  # 高行号 → Train (Graben 丰富)
         else:
             train_tiles.append(t)
     return train_tiles, val_tiles
@@ -88,6 +89,8 @@ def detect_env():
         data_root_v8 = '/kaggle/input/datasets/changyasong/datasetv8/datasetv8'
         data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
 
+        data_root_v5 = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
+
         if os.path.isdir(data_root_v8):
             data_root = data_root_v8
             use_scene_split = True
@@ -96,6 +99,41 @@ def detect_env():
             data_root = data_root_v6
             use_scene_split = False
             print(f'[Env] v6 (legacy split): {data_root}')
+        elif os.path.isdir(data_root_v5):
+            # ---- v5: train(全量Mare除test) + test(独立Mare区), 无 val ----
+            data_root = data_root_v5
+            train_img_dir = os.path.join(data_root, 'train', 'image')
+            all_tiles = sorted(f for f in os.listdir(train_img_dir)
+                               if f.lower().endswith(('.tif', '.tiff', '.png')))
+            import random as _rng
+            _rng.seed(42)
+            _rng.shuffle(all_tiles)
+            val_n = max(1, int(len(all_tiles) * 0.05))
+            val_tiles_v5   = all_tiles[:val_n]
+            train_tiles_v5 = all_tiles[val_n:]
+            os.makedirs('/kaggle/working', exist_ok=True)
+            _v5_train_list = '/kaggle/working/v5_train_list.txt'
+            _v5_val_list   = '/kaggle/working/v5_val_list.txt'
+            with open(_v5_train_list, 'w') as _f:
+                _f.writelines(t + '\n' for t in train_tiles_v5)
+            with open(_v5_val_list, 'w') as _f:
+                _f.writelines(t + '\n' for t in val_tiles_v5)
+            print(f'[Env] v5: Train={len(train_tiles_v5)}, Val(5%临时)={len(val_tiles_v5)}, '
+                  f'Test=独立区域')
+            return {
+                'is_kaggle': True,
+                'train_image_dir': os.path.join(data_root, 'train', 'image'),
+                'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+                'val_image_dir':   os.path.join(data_root, 'train', 'image'),
+                'val_mask_dir':    os.path.join(data_root, 'train', 'mask'),
+                'test_image_dir':  os.path.join(data_root, 'test',  'image'),
+                'test_mask_dir':   os.path.join(data_root, 'test',  'mask'),
+                'pretrain_dir':    os.path.join(data_root, 'pretrain'),
+                'record_path':     '/kaggle/working/result',
+                'train_valid_list': _v5_train_list,
+                'val_valid_list':   _v5_val_list,
+                'test_valid_list':  None,
+            }
         else:
             data_root = data_root_v6
             use_scene_split = False
