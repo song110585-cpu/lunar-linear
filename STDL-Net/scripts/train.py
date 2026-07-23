@@ -86,12 +86,34 @@ def detect_env():
     """自动检测 Kaggle vs 本地环境, 返回路径配置和预训练目录."""
     if os.path.isdir('/kaggle'):
         # ---- Kaggle 环境 ----
-        data_root_v8 = '/kaggle/input/datasets/changyasong/datasetv8/datasetv8'
+        data_root_v9 = '/kaggle/input/datasets/changyasong/dataset9/datasetv9'
+        data_root_v8 = '/kaggle/input/datasets/changyasong/dataset8/datasetv8'
         data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
-
         data_root_v5 = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
 
-        if os.path.isdir(data_root_v8):
+        if os.path.isdir(data_root_v9):
+            # ---- v9: 地理边界切分, train/val/test 目录独立, list 在 pretrain/ ----
+            data_root = data_root_v9
+            pretrain_dir = os.path.join(data_root, 'pretrain')
+            train_list = os.path.join(pretrain_dir, 'train_list.txt')
+            val_list   = os.path.join(pretrain_dir, 'val_list.txt')
+            test_list  = os.path.join(pretrain_dir, 'test_list.txt')
+            print(f'[Env] v9 (Geographic Split): {data_root}')
+            return {
+                'is_kaggle': True,
+                'train_image_dir': os.path.join(data_root, 'train', 'image'),
+                'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+                'val_image_dir':   os.path.join(data_root, 'val',   'image'),
+                'val_mask_dir':    os.path.join(data_root, 'val',   'mask'),
+                'test_image_dir':  os.path.join(data_root, 'test',  'image'),
+                'test_mask_dir':   os.path.join(data_root, 'test',  'mask'),
+                'pretrain_dir':    pretrain_dir,
+                'record_path':     '/kaggle/working/result',
+                'train_valid_list': train_list if os.path.isfile(train_list) else None,
+                'val_valid_list':   val_list   if os.path.isfile(val_list)   else None,
+                'test_valid_list':  test_list  if os.path.isfile(test_list)  else None,
+            }
+        elif os.path.isdir(data_root_v8):
             data_root = data_root_v8
             use_scene_split = True
             print(f'[Env] v8 (Scene Split): {data_root}')
@@ -192,9 +214,31 @@ def detect_env():
                 'test_valid_list':  None,
             }
     else:
-        # ---- 本地环境 (dataset_v8) ----
+        # ---- 本地环境: v9 优先, 回退 v8 ----
+        _data_root_v9 = r'E:\月球_dataset\dataset\datasetv9'
         _data_root = r'E:\月球_dataset\dataset\datasetv8'
         _filter_dir = r'E:\月球_dataset\dataset\dataset_analysis'
+
+        if os.path.isdir(_data_root_v9):
+            _pretrain_v9 = os.path.join(_data_root_v9, 'pretrain')
+            _tl = os.path.join(_pretrain_v9, 'train_list.txt')
+            _vl = os.path.join(_pretrain_v9, 'val_list.txt')
+            _xl = os.path.join(_pretrain_v9, 'test_list.txt')
+            print(f'[Env] 本地 v9 (Geographic Split): {_data_root_v9}')
+            return {
+                'is_kaggle': False,
+                'train_image_dir': os.path.join(_data_root_v9, 'train', 'image'),
+                'train_mask_dir':  os.path.join(_data_root_v9, 'train', 'mask'),
+                'val_image_dir':   os.path.join(_data_root_v9, 'val',   'image'),
+                'val_mask_dir':    os.path.join(_data_root_v9, 'val',   'mask'),
+                'test_image_dir':  os.path.join(_data_root_v9, 'test',  'image'),
+                'test_mask_dir':   os.path.join(_data_root_v9, 'test',  'mask'),
+                'pretrain_dir':    None,
+                'record_path':     r'E:\月球_dataset\dataset\result',
+                'train_valid_list': _tl if os.path.isfile(_tl) else None,
+                'val_valid_list':   _vl if os.path.isfile(_vl) else None,
+                'test_valid_list':  _xl if os.path.isfile(_xl) else None,
+            }
 
         train_list = os.path.join(_filter_dir, 'valid_tiles_train_scene.txt')
         val_list   = os.path.join(_filter_dir, 'valid_tiles_val_scene.txt')
@@ -306,6 +350,9 @@ class HyperParameter:
         # ---- 数据路径 ----
         self.train_image_dir = env['train_image_dir']
         self.train_mask_dir  = env['train_mask_dir']
+        # v9: val 目录独立; v8/v6: val 与 train 同目录
+        self.val_image_dir   = env.get('val_image_dir', env['train_image_dir'])
+        self.val_mask_dir    = env.get('val_mask_dir',  env['train_mask_dir'])
         self.test_image_dir  = env['test_image_dir']
         self.test_mask_dir   = env['test_mask_dir']
 
@@ -711,8 +758,8 @@ def train(hp: HyperParameter):
         valid_list_file=hp.train_valid_list,
     )
     val_data = MyDataset(
-        images_dir=hp.train_image_dir,
-        masks_dir=hp.train_mask_dir,
+        images_dir=hp.val_image_dir,
+        masks_dir=hp.val_mask_dir,
         valid_list_file=hp.val_valid_list,
     )
     test_data = MyDataset(

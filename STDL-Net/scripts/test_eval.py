@@ -1,6 +1,6 @@
 r"""
 用 best checkpoint 对独立测试集做评估，打印 mIoU 等指标。
-用法: python STDL-Net/scripts/test_eval.py 'E:\月球_dataset\output\result33\result\result'
+用法: python STDL-Net/scripts/test_eval.py 'E:\月球_dataset\output\result45'
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

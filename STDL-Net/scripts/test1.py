@@ -25,8 +25,8 @@ TEST_IMG_DIR = r"E:\月球_dataset\Research area\test\dataset_v6\image"
 
 # ========== TTA 配置 ==========
 TTA_ENABLED = True                # 设为 True 启用 TTA 推理
-MODEL_PATH = r"E:\月球_dataset\baseline模型结果\result26\result\result\best_small.pth"   # best_small.pth 路径
-MODEL_SIZE = 'small'
+MODEL_PATH = r"E:\月球_dataset\baseline模型结果\result26\result\result\best_base.pth"   # best_small.pth 路径
+MODEL_SIZE = 'base'
 USE_STRIP_POOLING = False         # R19 模型=True; R17/R18 baseline 模型=False
 TTA_OUTPUT_DIR = ''                # 留空则自动设为 RESULT_DIR/tta_pred_mask
 
