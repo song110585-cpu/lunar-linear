@@ -721,6 +721,7 @@ def train(hp: HyperParameter):
 
     model_kwargs = dict(
         size=hp.model_size,
+        img_size=config.get('img_size', 512),
         num_classes=hp.num_classes,
         in_channels=hp.in_channels,
         pretrained=True,
