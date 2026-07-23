@@ -9,6 +9,7 @@ seed: 42
 # ---- 核心参数 ----
 num_classes: 5
 in_channels: 5
+img_size: 256          # v9 tile=256x256, 必须与切片尺寸一致
 model_size: base
 freeze_stages: 1
 

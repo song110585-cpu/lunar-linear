@@ -378,11 +378,14 @@ class BasicLayer(nn.Module):
         self.depth = depth  # transformer 块的数量
         self.use_checkpoint = use_checkpoint  # 是否使用梯度检查点
 
+        # 当特征图小于 window_size 时, 缩小窗口以适配 (256x256 输入时 Stage4 为 8x8)
+        effective_ws = min(window_size, min(input_resolution))
+
         # 构建 transformer 块
         self.blocks = nn.ModuleList([
             SwinTransformerBlock(dim=dim, input_resolution=input_resolution,
-                                 num_heads=num_heads, window_size=window_size,
-                                 shift_size=0 if (i % 2 == 0) else window_size // 2,
+                                 num_heads=num_heads, window_size=effective_ws,
+                                 shift_size=0 if (i % 2 == 0) else effective_ws // 2,
                                  mlp_ratio=mlp_ratio,
                                  qkv_bias=qkv_bias,
                                  drop=drop, attn_drop=attn_drop,
