@@ -303,6 +303,7 @@ class HyperParameter:
         # ---- 核心参数 (YAML 覆盖默认值) ----
         self.num_classes    = config.get('num_classes', 5)
         self.in_channels    = config.get('in_channels', 5)
+        self.img_size       = config.get('img_size', 512)
         self.model_size     = config.get('model_size', 'small')
         self.freeze_stages  = config.get('freeze_stages', 1)
 
@@ -721,7 +722,7 @@ def train(hp: HyperParameter):
 
     model_kwargs = dict(
         size=hp.model_size,
-        img_size=config.get('img_size', 512),
+        img_size=hp.img_size,
         num_classes=hp.num_classes,
         in_channels=hp.in_channels,
         pretrained=True,
