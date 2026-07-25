@@ -214,57 +214,98 @@ def detect_env():
                 'test_valid_list':  None,
             }
     else:
-        # ---- 本地环境: v9 优先, 回退 v8 ----
-        _data_root_v9 = r'E:\月球_dataset\dataset\datasetv9'
-        _data_root = r'E:\月球_dataset\dataset\datasetv8'
-        _filter_dir = r'E:\月球_dataset\dataset\dataset_analysis'
+        # ---- 本地环境: v5 > v9 > v8 优先级 ----
+        _base = r'E:\月球_dataset\dataset'
+        _filter_dir = os.path.join(_base, 'dataset_analysis')
+        os.makedirs(_filter_dir, exist_ok=True)
 
-        if os.path.isdir(_data_root_v9):
-            _pretrain_v9 = os.path.join(_data_root_v9, 'pretrain')
-            _tl = os.path.join(_pretrain_v9, 'train_list.txt')
-            _vl = os.path.join(_pretrain_v9, 'val_list.txt')
-            _xl = os.path.join(_pretrain_v9, 'test_list.txt')
-            print(f'[Env] 本地 v9 (Geographic Split): {_data_root_v9}')
+        # v5 (512 tile, 无 val → 自动生成 5% 分层随机 val)
+        _v5 = os.path.join(_base, 'datasetv5')
+        if os.path.isdir(_v5):
+            _tl = os.path.join(_filter_dir, 'valid_tiles_train_v5.txt')
+            _vl = os.path.join(_filter_dir, 'valid_tiles_val_v5.txt')
+            if not os.path.isfile(_vl):
+                print('[Env] v5: 生成 5% 分层随机 val...')
+                import random as _rnd, numpy as _np, rasterio
+                from collections import defaultdict
+                _rnd.seed(42); _np.random.seed(42)
+                _cls_tiles = defaultdict(list)
+                for t in sorted(f for f in os.listdir(os.path.join(_v5, 'train', 'image')) if f.endswith('.tif')):
+                    with rasterio.open(os.path.join(_v5, 'train', 'mask', t)) as src:
+                        m = src.read(1).astype(_np.int64)
+                    m[(m > 4) | (m < 0)] = 0
+                    c = max((int(_np.sum(m == c)) for c in range(1, 5)), default=0)
+                    dom = max(range(1, 5), key=lambda c: int(_np.sum(m == c))) if _np.sum(m > 0) > 0 else 0
+                    _cls_tiles[dom].append(t)
+                _tr, _va = [], []
+                for c in range(5):
+                    ts = _cls_tiles[c]; _rnd.shuffle(ts)
+                    nv = max(1, int(len(ts) * 0.05))
+                    _va += ts[:nv]; _tr += ts[nv:]
+                for path, tiles in [(_tl, _tr), (_vl, _va)]:
+                    with open(path, 'w', encoding='utf-8') as f:
+                        for t in sorted(tiles): f.write(t + '\n')
+                print(f'[Env] v5 Train={len(_tr)}, Val={len(_va)}')
+            print(f'[Env] 本地 v5 (5% Stratified Val): {_v5}')
             return {
                 'is_kaggle': False,
-                'train_image_dir': os.path.join(_data_root_v9, 'train', 'image'),
-                'train_mask_dir':  os.path.join(_data_root_v9, 'train', 'mask'),
-                'val_image_dir':   os.path.join(_data_root_v9, 'val',   'image'),
-                'val_mask_dir':    os.path.join(_data_root_v9, 'val',   'mask'),
-                'test_image_dir':  os.path.join(_data_root_v9, 'test',  'image'),
-                'test_mask_dir':   os.path.join(_data_root_v9, 'test',  'mask'),
+                'train_image_dir': os.path.join(_v5, 'train', 'image'),
+                'train_mask_dir':  os.path.join(_v5, 'train', 'mask'),
+                'val_image_dir':   os.path.join(_v5, 'train', 'image'),
+                'val_mask_dir':    os.path.join(_v5, 'train', 'mask'),
+                'test_image_dir':  os.path.join(_v5, 'test', 'image'),
+                'test_mask_dir':   os.path.join(_v5, 'test', 'mask'),
                 'pretrain_dir':    None,
-                'record_path':     r'E:\月球_dataset\dataset\result',
-                'train_valid_list': _tl if os.path.isfile(_tl) else None,
-                'val_valid_list':   _vl if os.path.isfile(_vl) else None,
-                'test_valid_list':  _xl if os.path.isfile(_xl) else None,
+                'record_path':     os.path.join(_base, 'result'),
+                'train_valid_list': _tl,
+                'val_valid_list':   _vl,
+                'test_valid_list':  None,
             }
 
-        train_list = os.path.join(_filter_dir, 'valid_tiles_train_scene.txt')
-        val_list   = os.path.join(_filter_dir, 'valid_tiles_val_scene.txt')
+        # v9 (Geographic Split, 256 tile)
+        _v9 = os.path.join(_base, 'datasetv9')
+        if os.path.isdir(_v9):
+            _pt = os.path.join(_v9, 'pretrain')
+            print(f'[Env] 本地 v9 (Geographic Split): {_v9}')
+            return {
+                'is_kaggle': False,
+                'train_image_dir': os.path.join(_v9, 'train', 'image'),
+                'train_mask_dir':  os.path.join(_v9, 'train', 'mask'),
+                'val_image_dir':   os.path.join(_v9, 'val',   'image'),
+                'val_mask_dir':    os.path.join(_v9, 'val',   'mask'),
+                'test_image_dir':  os.path.join(_v9, 'test',  'image'),
+                'test_mask_dir':   os.path.join(_v9, 'test',  'mask'),
+                'pretrain_dir':    None,
+                'record_path':     os.path.join(_base, 'result'),
+                'train_valid_list': os.path.join(_pt, 'train_list.txt') if os.path.isfile(os.path.join(_pt, 'train_list.txt')) else None,
+                'val_valid_list':   os.path.join(_pt, 'val_list.txt')   if os.path.isfile(os.path.join(_pt, 'val_list.txt'))   else None,
+                'test_valid_list':  os.path.join(_pt, 'test_list.txt')  if os.path.isfile(os.path.join(_pt, 'test_list.txt'))  else None,
+            }
 
-        if not (os.path.isfile(train_list) and os.path.isfile(val_list)):
-            print('[Env] generating scene split from filename rules...')
-            train_tiles, val_tiles = _generate_scene_split(
-                os.path.join(_data_root, 'train', 'image'))
-            os.makedirs(_filter_dir, exist_ok=True)
-            for path, tiles in [(train_list, train_tiles), (val_list, val_tiles)]:
+        # v8 (Scene Split, fallback)
+        _v8 = os.path.join(_base, 'datasetv8')
+        _tl = os.path.join(_filter_dir, 'valid_tiles_train_scene.txt')
+        _vl = os.path.join(_filter_dir, 'valid_tiles_val_scene.txt')
+        if not (os.path.isfile(_tl) and os.path.isfile(_vl)):
+            print('[Env] v8: generating scene split...')
+            _tr, _va = _generate_scene_split(os.path.join(_v8, 'train', 'image'))
+            for path, tiles in [(_tl, _tr), (_vl, _va)]:
                 with open(path, 'w', encoding='utf-8') as f:
                     for t in tiles: f.write(t + '\n')
-            print(f'[Env] Train={len(train_tiles)}, Val={len(val_tiles)}')
-
+            print(f'[Env] v8 Train={len(_tr)}, Val={len(_va)}')
+        print(f'[Env] 本地 v8 (Scene Split): {_v8}')
         return {
             'is_kaggle': False,
-            'train_image_dir': os.path.join(_data_root, 'train', 'image'),
-            'train_mask_dir':  os.path.join(_data_root, 'train', 'mask'),
-            'val_image_dir':   os.path.join(_data_root, 'train', 'image'),
-            'val_mask_dir':    os.path.join(_data_root, 'train', 'mask'),
-            'test_image_dir':  os.path.join(_data_root, 'test', 'image'),
-            'test_mask_dir':   os.path.join(_data_root, 'test', 'mask'),
+            'train_image_dir': os.path.join(_v8, 'train', 'image'),
+            'train_mask_dir':  os.path.join(_v8, 'train', 'mask'),
+            'val_image_dir':   os.path.join(_v8, 'train', 'image'),
+            'val_mask_dir':    os.path.join(_v8, 'train', 'mask'),
+            'test_image_dir':  os.path.join(_v8, 'test', 'image'),
+            'test_mask_dir':   os.path.join(_v8, 'test', 'mask'),
             'pretrain_dir':    None,
-            'record_path':     r'E:\月球_dataset\dataset\result',
-            'train_valid_list': train_list,
-            'val_valid_list':   val_list,
+            'record_path':     os.path.join(_base, 'result'),
+            'train_valid_list': _tl,
+            'val_valid_list':   _vl,
             'test_valid_list':  None,
         }
 

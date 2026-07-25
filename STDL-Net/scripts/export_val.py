@@ -1,6 +1,6 @@
 """
 用 best_small.pth 对验证集做推理，生成 pred_mask PNG。
-用法:python STDL-Net/scripts/export_val.py "E:\月球_dataset\output\result43\result-4"
+用法:python STDL-Net/scripts/export_val.py "E:\月球_dataset\output\result47"
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,9 +18,9 @@ from PIL import Image
 from MyDataset import MyDataset
 from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 
-VAL_IMG_DIR = r"E:\月球_dataset\Research area\train\dataset_v6\image"
-VAL_MASK_DIR = r"E:\月球_dataset\Research area\train\dataset_v6\mask"
-VAL_VALID_LIST = r"E:\月球_dataset\Research area\dataset_analysis\valid_tiles_val.txt"
+VAL_IMG_DIR = r"E:\月球_dataset\Research area\train\dataset_v9\image"
+VAL_MASK_DIR = r"E:\月球_dataset\Research area\train\dataset_v9\mask"
+VAL_VALID_LIST = r"E:\月球_dataset\dataset\datasetv9\pretrain\train_list.txt"
 
 
 def main():
@@ -102,9 +102,19 @@ def main():
     has_strip_pooling = any(k.startswith('sp2.') for k in state.keys())
     print(f'  Detected: LocalCNN={has_local_cnn}, StripPooling={has_strip_pooling}')
 
+    # 从 checkpoint 推断 img_size
+    img_size = 256
+    for k in state.keys():
+        if 'layers.0' in k and 'attn_mask' in k:
+            nW = state[k].shape[0]
+            img_size = int(nW ** 0.5) * 16 * 4  # nW → resolution → img_size
+            break
+    print(f'  Inferred img_size={img_size}')
+
     model = Swin_LCSRB_DeformablePSP_FPNPAN(
-        size=model_size, num_classes=5, in_channels=5, pretrained=False,
-        use_dem_guided=False, use_strip_pooling=has_strip_pooling, use_coord_attention=False,
+        img_size=img_size, size=model_size, num_classes=5, in_channels=5,
+        pretrained=False, use_dem_guided=False,
+        use_strip_pooling=has_strip_pooling, use_coord_attention=False,
         use_local_cnn=has_local_cnn)
     state = {k: v for k, v in state.items() if not k.startswith(('sp2.', 'sp3.'))}
     model.load_state_dict(state, strict=False)

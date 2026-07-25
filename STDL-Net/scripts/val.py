@@ -16,11 +16,11 @@ from PIL import Image
 
 # ==================== 路径配置 ====================
 # [TODO] 只需要改这里！把路径改成你下载的结果文件夹
-RESULT_DIR = r"E:\月球_dataset\output\result43\result-4"
+RESULT_DIR = r"E:\月球_dataset\output\result47"
 
 # 验证集来源自 train 目录，所以 GT 和影像使用 train 目录
-VAL_MASK_DIR = r"E:\月球_dataset\Research area\train\dataset_v8\mask"
-VAL_IMG_DIR  = r"E:\月球_dataset\Research area\train\dataset_v8\image"
+VAL_MASK_DIR = r"E:\月球_dataset\Research area\train\dataset_v9\mask"
+VAL_IMG_DIR  = r"E:\月球_dataset\Research area\train\dataset_v9\image"
 
 # ==================== 其他配置 ====================
 NUM_CLASSES = 5

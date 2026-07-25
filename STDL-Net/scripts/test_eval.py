@@ -1,6 +1,6 @@
 r"""
 用 best checkpoint 对独立测试集做评估，打印 mIoU 等指标。
-用法: python STDL-Net/scripts/test_eval.py 'E:\月球_dataset\output\result45'
+用法: python STDL-Net/scripts/test_eval.py 'E:\月球_dataset\output\result47'
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,8 +18,8 @@ from MyDataset import MyDataset
 from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 import metrics
 
-# 默认本地 v8 路径
-_DEFAULT_DATA = r"E:\月球_dataset\dataset\datasetv8"
+# 默认本地 v5 路径 (R48 基线)
+_DEFAULT_DATA = r"E:\月球_dataset\dataset\datasetv5"
 
 
 def main():
@@ -36,10 +36,10 @@ def main():
     data_dir = args.data_dir or _DEFAULT_DATA
 
     if args.split == 'val':
-        IMG_DIR = os.path.join(data_dir, 'train', 'image')
-        MASK_DIR = os.path.join(data_dir, 'train', 'mask')
-        VALID_LIST = args.val_list or r'E:\月球_dataset\dataset\dataset_analysis\valid_tiles_val_scene.txt'
-        LABEL = '验证集成绩 (Val - Mare Serenitatis 下半部)'
+        IMG_DIR = os.path.join(data_dir, 'val', 'image')
+        MASK_DIR = os.path.join(data_dir, 'val', 'mask')
+        VALID_LIST = args.val_list
+        LABEL = '验证集成绩 (Val)'
     else:
         IMG_DIR = os.path.join(data_dir, 'test', 'image')
         MASK_DIR = os.path.join(data_dir, 'test', 'mask')
@@ -84,9 +84,20 @@ def main():
     has_local_cnn = any(k.startswith('lc2.') for k in state.keys())
     has_strip_pooling = any(k.startswith('sp2.') for k in state.keys())
 
+    # 从 checkpoint 推断 img_size: stage0 mask 的 nW 反推分辨率
+    img_size = 512  # default
+    for k in state.keys():
+        if 'layers.0' in k and 'attn_mask' in k:
+            nW = state[k].shape[0]
+            res = int(nW ** 0.5) * 16  # window_size=16 → resolution
+            img_size = res * 4          # patch_size=4 → input size
+            break
+    print(f'Inferred img_size={img_size} from checkpoint')
+
     model = Swin_LCSRB_DeformablePSP_FPNPAN(
-        size=model_size, num_classes=5, in_channels=5, pretrained=False,
-        use_dem_guided=False, use_strip_pooling=has_strip_pooling, use_coord_attention=False,
+        img_size=img_size, size=model_size, num_classes=5, in_channels=5,
+        pretrained=False, use_dem_guided=False,
+        use_strip_pooling=has_strip_pooling, use_coord_attention=False,
         use_local_cnn=has_local_cnn)
     state = {k: v for k, v in state.items() if not k.startswith(('sp2.', 'sp3.'))}
     model.load_state_dict(state, strict=False)
