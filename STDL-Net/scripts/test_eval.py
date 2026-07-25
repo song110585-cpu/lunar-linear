@@ -72,7 +72,7 @@ def main():
     if model_size.endswith('.pth'):
         model_size = model_size.replace('.pth', '')
     if not model_size:
-        model_size = 'base'
+        model_size = 'small'
     print(f'Model size: {model_size}')
 
     # 加载模型

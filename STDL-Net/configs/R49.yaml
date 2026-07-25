@@ -1,0 +1,47 @@
+# R49: R48 基线 + class_weights 调优 (Graben ↑ 4.0)
+# 目标: 拉升 Graben Recall 从 43% → 55%+
+# 用法: python scripts/train.py --config configs/R49.yaml
+
+seed: 42
+
+num_classes: 5
+in_channels: 5
+img_size: 512
+model_size: small
+freeze_stages: 1
+
+num_epochs: 100
+max_steps: 0
+batch_size: 4
+accum_steps: 1
+learning_rate: 5.0e-5
+
+weight_decay: 0.01
+grad_clip_norm: 0
+
+use_augment: true
+use_copypaste: true
+copypaste_p: 0.5
+use_strip_pooling: false
+use_coord_attention: false
+use_local_cnn: false
+use_boundary_loss: false
+use_dem_guided: false
+terrain_channels: 4
+
+use_focal_loss: false
+use_tversky_loss: false
+
+use_scale_aug: false
+use_tile_sampling: false
+
+early_stop: true
+patience: 12
+
+save_val_on_best: true
+save_all_test_on_best: true
+save_pred_mask_png: true
+save_pred_vis_png: true
+
+# R49 唯一改动: Graben 权重 1.5 → 4.0
+class_weights: [0.1, 1.0, 1.5, 2.5, 4.0]
