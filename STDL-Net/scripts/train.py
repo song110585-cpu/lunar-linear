@@ -365,8 +365,11 @@ class HyperParameter:
         self.terrain_channels   = config.get('terrain_channels', 4)
 
         # ---- 损失函数 ----
-        self.use_focal_loss = config.get('use_focal_loss', False)
-        self.focal_gamma    = config.get('focal_gamma', 2.0)
+        self.use_focal_loss   = config.get('use_focal_loss', False)
+        self.focal_gamma      = config.get('focal_gamma', 2.0)
+        self.use_tversky_loss = config.get('use_tversky_loss', False)
+        self.tversky_alpha    = config.get('tversky_alpha', 0.5)
+        self.tversky_beta     = config.get('tversky_beta', 0.5)
 
         # ---- 优化器正则 ----
         self.weight_decay   = config.get('weight_decay', 0.01)
@@ -586,6 +589,32 @@ class FocalLoss(nn.Module):
         if self.reduction == 'mean':
             return focal.mean()
         return focal.sum()
+
+
+class TverskyLoss(nn.Module):
+    """Tversky Loss: 精确控制 FP/FN 平衡.
+
+    α 惩罚 FP (提高 Precision), β 惩罚 FN (提高 Recall).
+    α=β=0.5 退化为 Dice; β>α → 偏重 Recall (少数类).
+    """
+    def __init__(self, alpha=0.5, beta=0.5, smooth=1.0):
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.smooth = smooth
+
+    def forward(self, logits, targets):
+        probs = torch.softmax(logits, dim=1)
+        loss = 0.0
+        for c in range(1, logits.shape[1]):
+            p = probs[:, c]
+            g = (targets == c).float()
+            tp = (p * g).sum(dim=(1, 2))
+            fp = (p * (1 - g)).sum(dim=(1, 2))
+            fn = ((1 - p) * g).sum(dim=(1, 2))
+            tversky = (tp + self.smooth) / (tp + self.alpha * fp + self.beta * fn + self.smooth)
+            loss += (1 - tversky).mean()
+        return loss / (logits.shape[1] - 1)
 
 
 def dice_loss(logits, targets, smooth=1.0):
@@ -844,6 +873,9 @@ def train(hp: HyperParameter):
     if hp.use_focal_loss:
         criterion = FocalLoss(alpha=class_weights, gamma=hp.focal_gamma)
         print(f'Loss: Focal(γ={hp.focal_gamma}) + 0.5*Dice')
+    elif hp.use_tversky_loss:
+        criterion = TverskyLoss(alpha=hp.tversky_alpha, beta=hp.tversky_beta)
+        print(f'Loss: Tversky(α={hp.tversky_alpha},β={hp.tversky_beta}) + 0.5*Dice')
     else:
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         print(f'Loss: CE + 0.5*Dice')
@@ -1109,7 +1141,12 @@ if __name__ == '__main__':
           f'BS: {hp.batch_size}x{hp.accum_steps}(eff={hp.batch_size * hp.accum_steps}), '
           f'LR: {hp.learning_rate}')
     print(f'Freeze stages: {hp.freeze_stages}')
-    loss_name = f'Focal(γ={hp.focal_gamma})' if hp.use_focal_loss else 'CE'
+    if hp.use_focal_loss:
+        loss_name = f'Focal(γ={hp.focal_gamma})'
+    elif hp.use_tversky_loss:
+        loss_name = f'Tversky(α={hp.tversky_alpha},β={hp.tversky_beta})'
+    else:
+        loss_name = 'CE'
     clip_str = hp.grad_clip_norm if hp.grad_clip_norm > 0 else 'off'
     print(f'Loss: {loss_name} + 0.5*Dice, wd={hp.weight_decay}, clip={clip_str}')
     print(f'Aug: {hp.use_augment}, Scale: {hp.use_scale_aug} ({hp.scale_range}), CopyPaste: {hp.use_copypaste} (p={hp.copypaste_p})')

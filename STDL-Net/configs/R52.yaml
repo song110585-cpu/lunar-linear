@@ -1,0 +1,59 @@
+# R52: R50 + Tversky Loss (α=0.3,β=0.7)
+# β>α → 偏向 Recall, 减少 Graben 漏检. 单一变量对比 R50.
+# 用法: python scripts/train.py --config configs/R52.yaml
+
+seed: 42
+
+# ---- 核心参数 ----
+num_classes: 5
+in_channels: 5
+img_size: 512
+model_size: small
+freeze_stages: 1
+
+num_epochs: 50
+max_steps: 0
+batch_size: 8
+accum_steps: 1
+learning_rate: 5.0e-5
+
+# ---- 优化器正则 ----
+weight_decay: 0.01
+grad_clip_norm: 0
+
+# ---- 模块开关 ----
+use_augment: true
+use_copypaste: true
+copypaste_p: 0.5
+use_strip_pooling: false
+use_coord_attention: false
+use_local_cnn: false
+use_boundary_loss: false
+use_dem_guided: false
+terrain_channels: 4
+
+# ---- 损失函数 (R52 改动: Tversky 替代 CE) ----
+use_focal_loss: false
+use_tversky_loss: true
+tversky_alpha: 0.3       # 轻罚 FP
+tversky_beta: 0.7         # 重罚 FN → 拉 Recall
+
+# ---- 数据增强 ----
+use_scale_aug: false
+
+# ---- Tile 采样 ----
+use_tile_sampling: true
+tile_sample_exp: 0.3
+
+# ---- Early stopping ----
+early_stop: true
+patience: 10
+
+# ---- 导出开关 ----
+save_val_on_best: true
+save_all_test_on_best: true
+save_pred_mask_png: true
+save_pred_vis_png: true
+
+# ---- 类别权重 (Tversky 自带平衡, 不额外加权) ----
+class_weights: [0.15, 1.0, 1.3, 1.8, 1.5]
