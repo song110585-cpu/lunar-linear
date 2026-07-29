@@ -629,7 +629,9 @@ def dice_loss(logits, targets, smooth=1.0):
     return dice / (logits.shape[1] - 1)
 
 
-def combined_loss(criterion, logits, targets):
+def combined_loss(criterion, logits, targets, use_tversky=False):
+    if use_tversky:
+        return criterion(logits, targets) + 0.5 * criterion.tversky(logits, targets)
     return criterion(logits, targets) + 0.5 * dice_loss(logits, targets)
 
 
@@ -870,18 +872,22 @@ def train(hp: HyperParameter):
     # ---- 损失 ----
     class_weights = torch.tensor(hp.class_weights, dtype=torch.float32).to(device)
     print(f'Class weights: {class_weights.tolist()}')
+    tversky_fn = None
     if hp.use_focal_loss:
         criterion = FocalLoss(alpha=class_weights, gamma=hp.focal_gamma)
         print(f'Loss: Focal(γ={hp.focal_gamma}) + 0.5*Dice')
     elif hp.use_tversky_loss:
-        criterion = TverskyLoss(alpha=hp.tversky_alpha, beta=hp.tversky_beta)
-        print(f'Loss: Tversky(α={hp.tversky_alpha},β={hp.tversky_beta}) + 0.5*Dice')
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        tversky_fn = TverskyLoss(alpha=hp.tversky_alpha, beta=hp.tversky_beta)
+        print(f'Loss: CE + 0.5*Tversky(α={hp.tversky_alpha},β={hp.tversky_beta})')
     else:
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         print(f'Loss: CE + 0.5*Dice')
 
     def loss_fn(logits, targets):
-        return combined_loss(criterion, logits, targets)
+        ce = criterion(logits, targets)
+        aux = 0.5 * (tversky_fn(logits, targets) if tversky_fn else dice_loss(logits, targets))
+        return ce + aux
 
     # ---- 优化器 & 调度器 ----
     optimizer = optim.AdamW(
@@ -1144,7 +1150,7 @@ if __name__ == '__main__':
     if hp.use_focal_loss:
         loss_name = f'Focal(γ={hp.focal_gamma})'
     elif hp.use_tversky_loss:
-        loss_name = f'Tversky(α={hp.tversky_alpha},β={hp.tversky_beta})'
+        loss_name = f'CE+Tversky(α={hp.tversky_alpha},β={hp.tversky_beta})'
     else:
         loss_name = 'CE'
     clip_str = hp.grad_clip_norm if hp.grad_clip_norm > 0 else 'off'
