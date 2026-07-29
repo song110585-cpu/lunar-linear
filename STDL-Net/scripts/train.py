@@ -89,7 +89,7 @@ def detect_env():
         data_root_v9 = '/kaggle/input/datasets/changyasong/dataset9/datasetv9'
         data_root_v8 = '/kaggle/input/datasets/changyasong/dataset8/datasetv8'
         data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
-        data_root_v5 = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
+        data_root_v5 = '/kaggle/input/datasets/yuanssy/dataset5/datasetv5'
 
         if os.path.isdir(data_root_v9):
             # ---- v9: 地理边界切分, train/val/test 目录独立, list 在 pretrain/ ----
