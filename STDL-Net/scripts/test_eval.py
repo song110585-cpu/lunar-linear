@@ -18,8 +18,8 @@ from MyDataset import MyDataset
 from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 import metrics
 
-# 默认本地 v5 路径 (R48 基线)
-_DEFAULT_DATA = r"E:\月球_dataset\dataset\datasetv5"
+# 默认本地 v10 路径
+_DEFAULT_DATA = r"E:\月球_dataset\dataset\datasetv10"
 
 
 def main():

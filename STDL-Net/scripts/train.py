@@ -86,12 +86,34 @@ def detect_env():
     """自动检测 Kaggle vs 本地环境, 返回路径配置和预训练目录."""
     if os.path.isdir('/kaggle'):
         # ---- Kaggle 环境 ----
+        data_root_v10 = '/kaggle/input/datasets/yuanssy/dataset10/datasetv10'
         data_root_v9 = '/kaggle/input/datasets/changyasong/dataset9/datasetv9'
         data_root_v8 = '/kaggle/input/datasets/changyasong/dataset8/datasetv8'
         data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
-        data_root_v5 = '/kaggle/input/datasets/yuanssy/dataset5/datasetv5'
+        # data_root_v5 = '/kaggle/input/datasets/yuanssy/dataset5/datasetv5'
 
-        if os.path.isdir(data_root_v9):
+        if os.path.isdir(data_root_v10):
+            data_root = data_root_v10
+            pretrain_dir = os.path.join(data_root, 'pretrain')
+            train_list = os.path.join(pretrain_dir, 'train_list.txt')
+            val_list   = os.path.join(pretrain_dir, 'val_list.txt')
+            test_list  = os.path.join(pretrain_dir, 'test_list.txt')
+            print(f'[Env] v10 (Geographic Split): {data_root}')
+            return {
+                'is_kaggle': True,
+                'train_image_dir': os.path.join(data_root, 'train', 'image'),
+                'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+                'val_image_dir':   os.path.join(data_root, 'val',   'image'),
+                'val_mask_dir':    os.path.join(data_root, 'val',   'mask'),
+                'test_image_dir':  os.path.join(data_root, 'test',  'image'),
+                'test_mask_dir':   os.path.join(data_root, 'test',  'mask'),
+                'pretrain_dir':    pretrain_dir,
+                'record_path':     '/kaggle/working/result',
+                'train_valid_list': train_list if os.path.isfile(train_list) else None,
+                'val_valid_list':   val_list   if os.path.isfile(val_list)   else None,
+                'test_valid_list':  test_list  if os.path.isfile(test_list)  else None,
+            }
+        elif os.path.isdir(data_root_v9):
             # ---- v9: 地理边界切分, train/val/test 目录独立, list 在 pretrain/ ----
             data_root = data_root_v9
             pretrain_dir = os.path.join(data_root, 'pretrain')
@@ -214,10 +236,30 @@ def detect_env():
                 'test_valid_list':  None,
             }
     else:
-        # ---- 本地环境: v5 > v9 > v8 优先级 ----
+        # ---- 本地环境: v10 > v5 > v9 > v8 优先级 ----
         _base = r'E:\月球_dataset\dataset'
         _filter_dir = os.path.join(_base, 'dataset_analysis')
         os.makedirs(_filter_dir, exist_ok=True)
+
+        # v10 (512 tile, 地理切分, train/val/test 独立, list 在 pretrain/)
+        _v10 = os.path.join(_base, 'datasetv10')
+        if os.path.isdir(_v10):
+            _pt = os.path.join(_v10, 'pretrain')
+            print(f'[Env] 本地 v10 (Geographic Split): {_v10}')
+            return {
+                'is_kaggle': False,
+                'train_image_dir': os.path.join(_v10, 'train', 'image'),
+                'train_mask_dir':  os.path.join(_v10, 'train', 'mask'),
+                'val_image_dir':   os.path.join(_v10, 'val',   'image'),
+                'val_mask_dir':    os.path.join(_v10, 'val',   'mask'),
+                'test_image_dir':  os.path.join(_v10, 'test',  'image'),
+                'test_mask_dir':   os.path.join(_v10, 'test',  'mask'),
+                'pretrain_dir':    None,
+                'record_path':     os.path.join(_base, 'result'),
+                'train_valid_list': os.path.join(_pt, 'train_list.txt') if os.path.isfile(os.path.join(_pt, 'train_list.txt')) else None,
+                'val_valid_list':   os.path.join(_pt, 'val_list.txt')   if os.path.isfile(os.path.join(_pt, 'val_list.txt'))   else None,
+                'test_valid_list':  os.path.join(_pt, 'test_list.txt')  if os.path.isfile(os.path.join(_pt, 'test_list.txt'))  else None,
+            }
 
         # v5 (512 tile, 无 val → 自动生成 5% 分层随机 val)
         _v5 = os.path.join(_base, 'datasetv5')
