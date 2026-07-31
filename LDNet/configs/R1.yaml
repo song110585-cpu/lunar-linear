@@ -1,0 +1,54 @@
+# R1: LDNet 双分支基线
+# 分支1 (Binary): BCE+Dice → "线在哪？"
+# 分支2 (4-Class): CE(仅前景像素) → "什么类型？"
+# 架构: 共享 SwinV2-LCSRB Backbone + 各自 FPNPAN Decoder + Gate
+# 目标: 对比 STDL-Net R50 (单分支 mIoU=0.502), 验证双分支解耦是否有效
+#
+# 用法: python scripts/train.py --config configs/R1.yaml
+
+seed: 42
+
+# ---- 核心参数 (与 R50 对齐) ----
+num_classes: 5
+in_channels: 5
+img_size: 512
+model_size: small
+freeze_stages: 1
+
+num_epochs: 100
+max_steps: 0
+batch_size: 4
+accum_steps: 1
+learning_rate: 5.0e-5
+
+# ---- 双分支 Loss 权重 ----
+bce_weight: 1.0
+dice_weight: 1.0
+ce_weight: 1.0
+# 4 类前景权重 (WR, Rille, Fault, Graben)
+class_weights_4: [1.0, 1.3, 1.8, 2.5]
+
+# ---- 优化器正则 ----
+weight_decay: 0.01
+grad_clip_norm: 0
+
+# ---- 数据增强 (与 R50 一致) ----
+use_augment: true
+use_copypaste: true
+copypaste_p: 0.5
+use_scale_aug: false
+
+# ---- Tile 采样 (R50 有效配置) ----
+use_tile_sampling: true
+tile_sample_exp: 0.3
+
+# ---- Early stopping ----
+use_val: true
+early_stop: true
+patience: 12
+
+# ---- 导出 ----
+save_val_on_best: true
+save_all_test_on_best: true
+save_pred_mask_png: true
+save_pred_vis_png: true
