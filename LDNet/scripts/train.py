@@ -617,7 +617,7 @@ def train(hp: HyperParameter):
 
     # ---- Kaggle: 替换 backbone 内置预训练路径 ----
     if hp.is_kaggle and hp.pretrain_dir:
-        import models.backbone as _bb
+        import backbone as _bb
         _bb._SWIN_V2_PRETRAINED = {
             'tiny':  os.path.join(hp.pretrain_dir, 'swinv2_tiny_patch4_window16_256.pth'),
             'small': os.path.join(hp.pretrain_dir, 'swinv2_small_patch4_window16_256.pth'),
