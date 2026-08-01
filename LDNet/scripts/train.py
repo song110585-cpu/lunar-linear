@@ -245,8 +245,15 @@ def detect_env():
 # ============================================================================
 
 def load_yaml_config(path):
+    # 先尝试直接路径, 再尝试相对于脚本所在目录
     if not os.path.exists(path):
-        raise FileNotFoundError(f'Config file not found: {path}')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        alt_path = os.path.join(os.path.dirname(script_dir), path)
+        if os.path.exists(alt_path):
+            path = alt_path
+        else:
+            raise FileNotFoundError(
+                f'Config file not found: {path} (also tried: {alt_path})')
     with open(path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 

@@ -152,6 +152,14 @@ def _make_env(data_root, pretrain_dir, record_path, tl, vl, test_l, is_kaggle, h
 # ============================================================================
 
 def load_yaml_config(path):
+    if not os.path.exists(path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        alt_path = os.path.join(os.path.dirname(script_dir), path)
+        if os.path.exists(alt_path):
+            path = alt_path
+        else:
+            raise FileNotFoundError(
+                f'Config file not found: {path} (also tried: {alt_path})')
     with open(path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
