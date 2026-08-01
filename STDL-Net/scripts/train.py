@@ -90,7 +90,7 @@ def detect_env():
         data_root_v9 = '/kaggle/input/datasets/changyasong/dataset9/datasetv9'
         data_root_v8 = '/kaggle/input/datasets/changyasong/dataset8/datasetv8'
         data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
-        data_root_v5 = '/kaggle/input/datasets/yuanssy/dataset5/datasetv5'
+        data_root_v5 = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
 
         if os.path.isdir(data_root_v5):
             data_root = data_root_v5
@@ -112,7 +112,7 @@ def detect_env():
                 'val_mask_dir':    os.path.join(data_root, 'train', 'mask'),
                 'test_image_dir':  os.path.join(data_root, 'test', 'image'),
                 'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
-                'pretrain_dir':    '/kaggle/input/datasets/changyasong/datasetv6/datasetv6/pretrain',
+                'pretrain_dir':    os.path.join(data_root, 'pretrain'),
                 'record_path':     '/kaggle/working/result',
                 'train_valid_list': _v5tl,
                 'val_valid_list':   _v5vl,
