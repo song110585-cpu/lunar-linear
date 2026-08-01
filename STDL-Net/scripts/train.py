@@ -90,9 +90,35 @@ def detect_env():
         data_root_v9 = '/kaggle/input/datasets/changyasong/dataset9/datasetv9'
         data_root_v8 = '/kaggle/input/datasets/changyasong/dataset8/datasetv8'
         data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
-        # data_root_v5 = '/kaggle/input/datasets/yuanssy/dataset5/datasetv5'
+        data_root_v5 = '/kaggle/input/datasets/yuanssy/dataset5/datasetv5'
 
-        if os.path.isdir(data_root_v10):
+        if os.path.isdir(data_root_v5):
+            data_root = data_root_v5
+            train_img_dir = os.path.join(data_root, 'train', 'image')
+            all_tiles = sorted(f for f in os.listdir(train_img_dir)
+                               if f.lower().endswith(('.tif', '.tiff', '.png')))
+            import random as _rng; _rng.seed(42); _rng.shuffle(all_tiles)
+            val_n = max(1, int(len(all_tiles) * 0.05))
+            os.makedirs('/kaggle/working', exist_ok=True)
+            _v5tl, _v5vl = '/kaggle/working/v5_train_list.txt', '/kaggle/working/v5_val_list.txt'
+            with open(_v5tl, 'w') as f: f.writelines(t + '\n' for t in all_tiles[val_n:])
+            with open(_v5vl, 'w') as f: f.writelines(t + '\n' for t in all_tiles[:val_n])
+            print(f'[Env] v5: Train={len(all_tiles)-val_n}, Val(5%)={val_n}')
+            return {
+                'is_kaggle': True,
+                'train_image_dir': os.path.join(data_root, 'train', 'image'),
+                'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+                'val_image_dir':   os.path.join(data_root, 'train', 'image'),
+                'val_mask_dir':    os.path.join(data_root, 'train', 'mask'),
+                'test_image_dir':  os.path.join(data_root, 'test', 'image'),
+                'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
+                'pretrain_dir':    os.path.join(data_root, 'pretrain'),
+                'record_path':     '/kaggle/working/result',
+                'train_valid_list': _v5tl,
+                'val_valid_list':   _v5vl,
+                'test_valid_list':  None,
+            }
+        elif os.path.isdir(data_root_v10):
             data_root = data_root_v10
             pretrain_dir = os.path.join(data_root, 'pretrain')
             train_list = os.path.join(pretrain_dir, 'train_list.txt')
@@ -143,41 +169,6 @@ def detect_env():
             data_root = data_root_v6
             use_scene_split = False
             print(f'[Env] v6 (legacy split): {data_root}')
-        elif os.path.isdir(data_root_v5):
-            # ---- v5: train(全量Mare除test) + test(独立Mare区), 无 val ----
-            data_root = data_root_v5
-            train_img_dir = os.path.join(data_root, 'train', 'image')
-            all_tiles = sorted(f for f in os.listdir(train_img_dir)
-                               if f.lower().endswith(('.tif', '.tiff', '.png')))
-            import random as _rng
-            _rng.seed(42)
-            _rng.shuffle(all_tiles)
-            val_n = max(1, int(len(all_tiles) * 0.05))
-            val_tiles_v5   = all_tiles[:val_n]
-            train_tiles_v5 = all_tiles[val_n:]
-            os.makedirs('/kaggle/working', exist_ok=True)
-            _v5_train_list = '/kaggle/working/v5_train_list.txt'
-            _v5_val_list   = '/kaggle/working/v5_val_list.txt'
-            with open(_v5_train_list, 'w') as _f:
-                _f.writelines(t + '\n' for t in train_tiles_v5)
-            with open(_v5_val_list, 'w') as _f:
-                _f.writelines(t + '\n' for t in val_tiles_v5)
-            print(f'[Env] v5: Train={len(train_tiles_v5)}, Val(5%临时)={len(val_tiles_v5)}, '
-                  f'Test=独立区域')
-            return {
-                'is_kaggle': True,
-                'train_image_dir': os.path.join(data_root, 'train', 'image'),
-                'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
-                'val_image_dir':   os.path.join(data_root, 'train', 'image'),
-                'val_mask_dir':    os.path.join(data_root, 'train', 'mask'),
-                'test_image_dir':  os.path.join(data_root, 'test',  'image'),
-                'test_mask_dir':   os.path.join(data_root, 'test',  'mask'),
-                'pretrain_dir':    os.path.join(data_root, 'pretrain'),
-                'record_path':     '/kaggle/working/result',
-                'train_valid_list': _v5_train_list,
-                'val_valid_list':   _v5_val_list,
-                'test_valid_list':  None,
-            }
         else:
             data_root = data_root_v6
             use_scene_split = False
