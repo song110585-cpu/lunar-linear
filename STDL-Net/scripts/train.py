@@ -112,7 +112,7 @@ def detect_env():
                 'val_mask_dir':    os.path.join(data_root, 'train', 'mask'),
                 'test_image_dir':  os.path.join(data_root, 'test', 'image'),
                 'test_mask_dir':   os.path.join(data_root, 'test', 'mask'),
-                'pretrain_dir':    os.path.join(data_root, 'pretrain'),
+                'pretrain_dir':    '/kaggle/input/datasets/changyasong/datasetv6/datasetv6/pretrain',
                 'record_path':     '/kaggle/working/result',
                 'train_valid_list': _v5tl,
                 'val_valid_list':   _v5vl,
