@@ -1,0 +1,49 @@
+# R2: LDNet-Binary 二分类基线 — Step 1 "线 vs 背景"
+# 模型: LDNetBinary (复用 STDL-Net R50 decoder)
+# Loss: BCE + Dice
+# 标签: 5类→2类 (0=背景, 1=线性构造)
+# 目标: IoU > 0.70, Recall > 80%
+#
+# 用法: python scripts/train_binary.py --config configs/R2_binary.yaml
+
+seed: 42
+
+# ---- 核心参数 ----
+img_size: 512
+in_channels: 5
+model_size: small
+freeze_stages: 1
+
+num_epochs: 80
+batch_size: 4
+accum_steps: 1
+learning_rate: 5.0e-5
+
+# ---- 损失函数 ----
+bce_weight: 1.0
+dice_weight: 1.0
+pos_weight: 2.0   # BCE 正样本权重, 缓解 98% 背景不平衡
+
+# ---- 优化器 ----
+weight_decay: 0.01
+grad_clip_norm: 0
+
+# ---- 数据增强 (与 R50 一致) ----
+use_augment: true
+use_copypaste: true
+copypaste_p: 0.5
+use_scale_aug: false
+
+# ---- Tile 采样 ----
+use_tile_sampling: true
+tile_sample_exp: 0.3
+
+# ---- Early stopping ----
+early_stop: true
+patience: 12
+
+# ---- 导出 ----
+save_val_on_best: true
+save_all_test_on_best: true
+save_pred_mask_png: true
+save_pred_vis_png: true
