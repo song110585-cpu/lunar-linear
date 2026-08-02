@@ -77,7 +77,7 @@ def detect_env():
                     with open(path, 'w', encoding='utf-8') as f:
                         for t in sorted(tiles): f.write(t + '\n')
                 print(f'[Env] Kaggle v5 Train={len(_tr)}, Val={len(_va)}')
-            return _make_env(data_root, pretrain_dir, '/kaggle/working/result', _tl, _vl, None, True)
+            return _make_env(data_root, pretrain_dir, '/kaggle/working/result', _tl, _vl, None, True, False)
 
         for _dr in [data_root_v10, data_root_v9, data_root_v8]:
             if os.path.isdir(_dr):
