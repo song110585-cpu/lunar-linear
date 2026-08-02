@@ -51,7 +51,7 @@ def detect_env():
 
         if os.path.isdir(data_root_v5):
             data_root = data_root_v5
-            pretrain_dir = '/kaggle/input/datasets/changyasong/datasetv5/pretrain'
+            pretrain_dir = os.path.join(data_root, 'pretrain')
             os.makedirs('/kaggle/working', exist_ok=True)
             _tl = '/kaggle/working/v5_train_list.txt'
             _vl = '/kaggle/working/v5_val_list.txt'

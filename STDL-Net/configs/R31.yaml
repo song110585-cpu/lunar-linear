@@ -1,5 +1,4 @@
-# R31: R26 Baseline + base模型
-# 按前景占比加权采样: 高前景tile更频繁出现, 缓解96%背景主导问题
+# R31: R26 Baseline +base模型
 # 用法: python scripts/train.py --config configs/R31.yaml
 
 # ---- 核心参数 ----
