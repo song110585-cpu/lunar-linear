@@ -44,14 +44,14 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 def detect_env():
     if os.path.isdir('/kaggle'):
-        data_root_v5 = '/kaggle/input/datasets/yuanssy/dataset5/datasetv5'
+        data_root_v5 = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
         data_root_v10 = '/kaggle/input/datasets/yuanssy/dataset10/datasetv10'
         data_root_v9 = '/kaggle/input/datasets/changyasong/dataset9/datasetv9'
         data_root_v8 = '/kaggle/input/datasets/changyasong/dataset8/datasetv8'
 
         if os.path.isdir(data_root_v5):
             data_root = data_root_v5
-            pretrain_dir = os.path.join(data_root, 'pretrain')
+            pretrain_dir = '/kaggle/input/datasets/changyasong/datasetv5/pretrain'
             os.makedirs('/kaggle/working', exist_ok=True)
             _tl = '/kaggle/working/v5_train_list.txt'
             _vl = '/kaggle/working/v5_val_list.txt'
