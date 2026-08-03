@@ -24,7 +24,7 @@ grad_clip_norm: 0
 
 # ---- 模块开关 (全部关闭, 最简基线) ----
 use_augment: true
-use_copypaste: true
+use_copypaste: false
 copypaste_p: 0.5
 use_strip_pooling: false
 use_coord_attention: false
