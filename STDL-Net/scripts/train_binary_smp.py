@@ -56,7 +56,7 @@ def main():
 
     # ---- 数据 (复用 STDL-Net 的 Kaggle 路径逻辑) ----
     if os.path.isdir('/kaggle'):
-        data_root = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
+        data_root = '/kaggle/input/datasets/yuanssy/dataset5/datasetv5'
         pretrain_path = None  # SMP 自动下载预训练
         record_path = '/kaggle/working/result'
     else:
