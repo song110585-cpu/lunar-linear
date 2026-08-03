@@ -94,15 +94,6 @@ def main():
         classes=2,
     ).to(device)
 
-    # 对于 5 通道输入，SMP 会自动处理第一层卷积的通道扩展
-    # 但 ImageNet 预训练是 3 通道，需要手动扩展
-    w = model.encoder.conv1.weight.data
-    model.encoder.conv1 = nn.Conv2d(5, 64, 7, 2, 3, bias=False)
-    model.encoder.conv1.weight.data[:, :3] = w
-    # 通道 4-5: 用通道 0-2 的均值初始化
-    model.encoder.conv1.weight.data[:, 3:] = w[:, :3].mean(dim=1, keepdim=True)
-    model.encoder.conv1 = model.encoder.conv1.to(device)
-
     n = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"Params: {n:.1f}M")
 
