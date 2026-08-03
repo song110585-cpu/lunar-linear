@@ -449,7 +449,9 @@ class HyperParameter:
 # 工具函数
 # ============================================================================
 
-CLASS_NAMES = ['背景', '皱脊', '月溪', '断层', '地堑']
+CLASS_NAMES_5 = ['背景', '皱脊', '月溪', '断层', '地堑']
+CLASS_NAMES_2 = ['背景', '线性构造']
+
 CLASS_COLORS = np.array([
     [0, 0, 0],
     [255, 0, 0],
@@ -457,7 +459,9 @@ CLASS_COLORS = np.array([
     [0, 200, 0],
     [255, 255, 0],
 ], dtype=np.uint8)
-CLASS_COLORS_PLT = ['black', 'red', 'dodgerblue', 'green', 'orange']
+CLASS_COLORS_BINARY = np.array([[0, 0, 0], [255, 255, 255]], dtype=np.uint8)
+CLASS_COLORS_PLT_5 = ['black', 'red', 'dodgerblue', 'green', 'orange']
+CLASS_COLORS_PLT_2 = ['black', 'red']
 
 
 def denormalize(tensor_image, mean=None, std=None):
@@ -482,8 +486,9 @@ def denormalize(tensor_image, mean=None, std=None):
     return img_np.transpose(1, 2, 0)
 
 
-def mask_to_color(mask: np.ndarray) -> np.ndarray:
-    return CLASS_COLORS[np.clip(mask.astype(np.int64), 0, 4)]
+def mask_to_color(mask: np.ndarray, num_classes: int = 5) -> np.ndarray:
+    colors = CLASS_COLORS_BINARY if num_classes == 2 else CLASS_COLORS
+    return colors[np.clip(mask.astype(np.int64), 0, num_classes - 1)]
 
 
 def error_map(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
@@ -707,8 +712,8 @@ def export_all_val(model, data_iter, save_root, epoch, num_classes, device,
 
                 fig, axes = plt.subplots(1, 4, figsize=(16, 4))
                 axes[0].imshow(wac, cmap='gray');          axes[0].set_title(f'WAC - {stem}', fontsize=8)
-                axes[1].imshow(mask_to_color(gt_np));      axes[1].set_title('GT')
-                axes[2].imshow(mask_to_color(pred_np));    axes[2].set_title('Pred')
+                axes[1].imshow(mask_to_color(gt_np, num_classes));      axes[1].set_title('GT')
+                axes[2].imshow(mask_to_color(pred_np, num_classes));    axes[2].set_title('Pred')
                 axes[3].imshow(error_map(gt_np, pred_np)); axes[3].set_title('Error(G=TP,R=FN,O=FP)')
                 for ax in axes:
                     ax.axis('off')
@@ -748,8 +753,8 @@ def export_all_test(model, test_iter, save_root, epoch, num_classes, device, use
 
             fig, axes = plt.subplots(1, 4, figsize=(16, 4))
             axes[0].imshow(wac, cmap='gray');          axes[0].set_title(f'WAC - {stem}', fontsize=8)
-            axes[1].imshow(mask_to_color(gt_np));      axes[1].set_title('GT')
-            axes[2].imshow(mask_to_color(pred_np));    axes[2].set_title('Pred')
+            axes[1].imshow(mask_to_color(gt_np, num_classes));      axes[1].set_title('GT')
+            axes[2].imshow(mask_to_color(pred_np, num_classes));    axes[2].set_title('Pred')
             axes[3].imshow(error_map(gt_np, pred_np)); axes[3].set_title('Error(G=TP,R=FN,O=FP)')
             for ax in axes:
                 ax.axis('off')
@@ -761,6 +766,9 @@ def export_all_test(model, test_iter, save_root, epoch, num_classes, device, use
 
 
 def plot_training_curves(history, save_path, num_classes):
+    class_names = CLASS_NAMES_2 if num_classes == 2 else CLASS_NAMES_5
+    class_colors = CLASS_COLORS_PLT_2 if num_classes == 2 else CLASS_COLORS_PLT_5
+
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     ep = history['epoch']
 
@@ -779,7 +787,7 @@ def plot_training_curves(history, save_path, num_classes):
     arr = np.array(history['train_iou_per_class'])
     for c in range(num_classes):
         axes[1, 0].plot(ep, arr[:, c], 'o-', ms=2, lw=1.5,
-                        color=CLASS_COLORS_PLT[c], label=CLASS_NAMES[c])
+                        color=class_colors[c], label=class_names[c])
     axes[1, 0].set_xlabel('Epoch'); axes[1, 0].set_ylabel('IoU')
     axes[1, 0].set_title('Train Per-Class IoU'); axes[1, 0].legend(); axes[1, 0].grid(True, alpha=0.3)
 
@@ -787,7 +795,7 @@ def plot_training_curves(history, save_path, num_classes):
         arr_val = np.array(history['val_iou_per_class'])
         for c in range(num_classes):
             axes[1, 1].plot(ep, arr_val[:, c], '^-', ms=2, lw=1.5,
-                            color=CLASS_COLORS_PLT[c], label=CLASS_NAMES[c])
+                            color=class_colors[c], label=class_names[c])
     axes[1, 1].set_xlabel('Epoch'); axes[1, 1].set_ylabel('IoU')
     axes[1, 1].set_title('Val Per-Class IoU'); axes[1, 1].legend(); axes[1, 1].grid(True, alpha=0.3)
 
@@ -801,6 +809,11 @@ def plot_training_curves(history, save_path, num_classes):
 # 训练
 # ============================================================================
 
+def label_to_binary(label):
+    """5类 mask (0-4) → 二值 mask (0/1). 0=背景, 1=线性构造."""
+    return (label > 0).long()
+
+
 def train(hp: HyperParameter):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     use_cuda = torch.cuda.is_available()
@@ -810,6 +823,11 @@ def train(hp: HyperParameter):
               '正式训练请在 Kaggle GPU 环境运行 notebook.')
 
     os.makedirs(hp.result_dir, exist_ok=True)
+
+    # ---- 二分类模式 ----
+    is_binary = (hp.num_classes == 2)
+    if is_binary:
+        print('Mode: BINARY (线 vs 背景), 自动将 class 1-4 合并为 1')
 
     # ---- Kaggle: 替换 swinv2unet 内置预训练路径 ----
     if hp.is_kaggle and hp.pretrain_dir:
@@ -966,6 +984,8 @@ def train(hp: HyperParameter):
             if hp.max_steps > 0 and step >= hp.max_steps:
                 break
             img, label = img.to(device), label.to(device)
+            if is_binary:
+                label = label_to_binary(label)
 
             with amp_ctx:
                 logits = model(img)
@@ -1012,6 +1032,8 @@ def train(hp: HyperParameter):
                 if hp.max_steps > 0 and len(val_losses) >= hp.max_steps:
                     break
                 img, label = img.to(device), label.to(device)
+                if is_binary:
+                    label = label_to_binary(label)
                 logits = model(img)
                 val_losses.append(loss_fn(logits, label).item())
                 pred = logits.argmax(dim=1)
@@ -1114,6 +1136,8 @@ def train(hp: HyperParameter):
         with torch.no_grad(), amp_ctx:
             for img, label, name in tqdm(test_iter, desc='Final Test Evaluation', unit='img'):
                 img, label = img.to(device), label.to(device)
+                if is_binary:
+                    label = label_to_binary(label)
                 logits = model(img)
                 test_losses.append(loss_fn(logits, label).item())
                 pred = logits.argmax(dim=1)
@@ -1124,8 +1148,9 @@ def train(hp: HyperParameter):
         print('\n======================= 最终测试集闭卷评估成绩 =======================')
         print(f'[Final Test] loss: {test_avg_loss:.4f}  mIoU: {tm["miou"]:.4f}  acc: {tm["accuracy"]:.4f}')
         print('  Per-Class IoU:')
+        _cn = CLASS_NAMES_2 if hp.num_classes == 2 else CLASS_NAMES_5
         for c in range(hp.num_classes):
-            print(f'    {CLASS_NAMES[c]:<15}: {tm["iou_per_class"][c]:.4f}')
+            print(f'    {_cn[c]:<15}: {tm["iou_per_class"][c]:.4f}')
         print('======================================================================')
 
         # 导出最终预测图

@@ -1,0 +1,57 @@
+# R_binary: 纯净二分类基线 — "线 vs 背景"
+# 基于 R48 配置, 唯一变量: num_classes: 5 → 2
+# 标签: 5类mask中 class 1-4 合并为 1 (线性构造)
+# 用法: python scripts/train.py --config configs/R_binary.yaml
+
+seed: 42
+
+# ---- 核心参数 ----
+num_classes: 2
+in_channels: 5
+img_size: 512
+model_size: small
+freeze_stages: 1
+
+num_epochs: 100
+max_steps: 0
+batch_size: 4
+accum_steps: 1
+learning_rate: 5.0e-5
+
+# ---- 优化器正则 ----
+weight_decay: 0.01
+grad_clip_norm: 0
+
+# ---- 模块开关 (全部关闭, 最简基线) ----
+use_augment: true
+use_copypaste: true
+copypaste_p: 0.5
+use_strip_pooling: false
+use_coord_attention: false
+use_local_cnn: false
+use_boundary_loss: false
+use_dem_guided: false
+terrain_channels: 4
+
+# ---- 损失函数 (CE + Dice) ----
+use_focal_loss: false
+use_tversky_loss: false
+
+# ---- 数据增强 ----
+use_scale_aug: false
+
+# ---- Tile 采样 ----
+use_tile_sampling: false
+
+# ---- Early stopping ----
+early_stop: true
+patience: 12
+
+# ---- 导出开关 ----
+save_val_on_best: true
+save_all_test_on_best: true
+save_pred_mask_png: true
+save_pred_vis_png: true
+
+# ---- 类别权重 (2类: bg, line) ----
+class_weights: [0.5, 1.0]
