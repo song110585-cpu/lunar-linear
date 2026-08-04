@@ -924,7 +924,12 @@ def train(hp: HyperParameter):
     class_weights = torch.tensor(hp.class_weights, dtype=torch.float32).to(device)
     print(f'Class weights: {class_weights.tolist()}')
     tversky_fn = None
-    if hp.use_focal_loss:
+    if is_binary:
+        # 二分类: BCE + Dice, pos_weight 对抗 class imbalance
+        pos_weight = torch.tensor([class_weights[1] / max(class_weights[0], 1e-8)], device=device)
+        criterion_bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        print(f'Loss: BCE(pos_w={pos_weight.item():.1f}) + 0.5*Dice')
+    elif hp.use_focal_loss:
         criterion = FocalLoss(alpha=class_weights, gamma=hp.focal_gamma)
         print(f'Loss: Focal(γ={hp.focal_gamma}) + 0.5*Dice')
     elif hp.use_tversky_loss:
@@ -936,7 +941,10 @@ def train(hp: HyperParameter):
         print(f'Loss: CE + 0.5*Dice')
 
     def loss_fn(logits, targets):
-        ce = criterion(logits, targets)
+        if is_binary:
+            ce = criterion_bce(logits[:, 1:2].float(), targets.unsqueeze(1).float())
+        else:
+            ce = criterion(logits, targets)
         aux = 0.5 * (tversky_fn(logits, targets) if tversky_fn else dice_loss(logits, targets))
         return ce + aux
 
