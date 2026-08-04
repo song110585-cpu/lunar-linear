@@ -1,0 +1,45 @@
+# R_WR_Serenitatis: 澄海 WR 二分类 (纯净基线)
+# 数据: 澄海 181 条 WR 面要素 → 270 tile
+# 用法: python scripts/train_wr.py --config configs/R_wr_serenitatis.yaml
+
+seed: 42
+
+# ---- 核心参数 ----
+num_classes: 2
+in_channels: 5
+img_size: 512
+model_size: small
+freeze_stages: 1
+
+num_epochs: 100
+max_steps: 0
+batch_size: 2
+accum_steps: 2
+learning_rate: 5.0e-5
+
+# ---- 优化器 ----
+weight_decay: 0.01
+grad_clip_norm: 0
+
+# ---- 损失 ----
+use_focal_loss: false
+use_tversky_loss: false
+
+# ---- 增强 ----
+use_augment: false
+
+# ---- 采样 ----
+use_tile_sampling: false
+
+# ---- 早停 ----
+early_stop: true
+patience: 15
+
+# ---- 导出 ----
+save_val_on_best: true
+save_all_test_on_best: true
+save_pred_mask_png: true
+save_pred_vis_png: true
+
+# ---- 类别权重 ----
+class_weights: [0.5, 1.0]

@@ -1191,9 +1191,27 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='STDL-Net 月球线性构造分割训练')
     parser.add_argument('--config', type=str, default=None,
                         help='YAML 配置文件路径 (如 configs/R24.yaml)')
+    parser.add_argument('--data-dir', type=str, default=None,
+                        help='覆盖数据根目录 (包含 train/val/test 子目录)')
+    parser.add_argument('--pretrain-dir', type=str, default=None,
+                        help='覆盖预训练权重目录')
     args = parser.parse_args()
 
     env = detect_env()
+    if args.data_dir:
+        # 覆盖数据路径
+        env['train_image_dir'] = os.path.join(args.data_dir, 'train', 'image')
+        env['train_mask_dir']  = os.path.join(args.data_dir, 'train', 'mask')
+        env['val_image_dir']   = os.path.join(args.data_dir, 'val',   'image')
+        env['val_mask_dir']    = os.path.join(args.data_dir, 'val',   'mask')
+        env['test_image_dir']  = os.path.join(args.data_dir, 'test',  'image')
+        env['test_mask_dir']   = os.path.join(args.data_dir, 'test',  'mask')
+        env['train_valid_list'] = None
+        env['val_valid_list']   = None
+        env['test_valid_list']  = None
+    if args.pretrain_dir:
+        env['pretrain_dir'] = args.pretrain_dir
+
     hp = HyperParameter(env, config=args.config)
 
     print(f'Environment: {"Kaggle" if hp.is_kaggle else "Local"}')
