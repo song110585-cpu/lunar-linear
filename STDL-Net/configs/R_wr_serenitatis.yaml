@@ -35,7 +35,8 @@ use_tversky_loss: false
 use_augment: true
 
 # ---- 采样 ----
-use_tile_sampling: false
+use_tile_sampling: true
+tile_sample_exp: 0.5  # 含WR tile被采样概率 ≈ (1/含WR占比)^0.5 ≈ 2x
 
 # ---- 早停 ----
 early_stop: true
@@ -47,5 +48,5 @@ save_all_test_on_best: true
 save_pred_mask_png: true
 save_pred_vis_png: true
 
-# ---- 类别权重 (WR 像素可能很少, 拉高线类) ----
-class_weights: [0.2, 1.0]
+# ---- 类别权重 (WR 像素占比 ~1-2%, pos_weight=10 补偿) ----
+class_weights: [0.1, 1.0]
