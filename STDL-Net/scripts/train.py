@@ -877,20 +877,31 @@ def train(hp: HyperParameter):
     print(f'Total params: {n_params:.1f}M, Trainable: {n_train:.1f}M')
 
     # ---- 数据集 ----
+    # 根据 in_channels 自适应 mean/std (1ch 用零均值单位方差, 5ch 用预计算值)
+    if len(CHANNEL_MEAN) >= hp.in_channels:
+        ds_mean = CHANNEL_MEAN[:hp.in_channels]
+        ds_std  = CHANNEL_STD[:hp.in_channels]
+    else:
+        ds_mean = [0.0] * hp.in_channels
+        ds_std  = [1.0] * hp.in_channels
+
     train_data_raw = MyDataset(
         images_dir=hp.train_image_dir,
         masks_dir=hp.train_mask_dir,
         valid_list_file=hp.train_valid_list,
+        mean=ds_mean, std=ds_std,
     )
     val_data = MyDataset(
         images_dir=hp.val_image_dir,
         masks_dir=hp.val_mask_dir,
         valid_list_file=hp.val_valid_list,
+        mean=ds_mean, std=ds_std,
     )
     test_data = MyDataset(
         images_dir=hp.test_image_dir,
         masks_dir=hp.test_mask_dir,
         valid_list_file=hp.test_valid_list,
+        mean=ds_mean, std=ds_std,
     )
 
     if hp.use_augment:

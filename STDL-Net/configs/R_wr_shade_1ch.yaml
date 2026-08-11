@@ -1,0 +1,53 @@
+# R_WR_Shade_1ch: WR 二分类 — Shade 单通道 59m 测试
+# 目的: 验证 59m 分辨率 vs 100m 5ch 的效果差异
+# 对照: R_wr_serenitatis.yaml (5ch 100m)
+
+seed: 42
+
+# ---- 核心参数 ----
+num_classes: 2
+in_channels: 1          # ← 单通道 Shade (59m)
+img_size: 512
+model_size: small
+freeze_stages: 1
+
+num_epochs: 80
+max_steps: 0
+batch_size: 2
+accum_steps: 2
+learning_rate: 5.0e-5
+
+# ---- 优化器 ----
+weight_decay: 0.01
+grad_clip_norm: 0
+
+# ---- 模块开关 (全部关闭，与 5ch 基线一致) ----
+use_dem_guided: false
+use_strip_pooling: false
+use_coord_attention: false
+use_local_cnn: false
+use_boundary_loss: false
+
+# ---- 损失 ----
+use_focal_loss: false
+use_tversky_loss: false
+
+# ---- 增强 ----
+use_augment: true
+
+# ---- 采样 ----
+use_tile_sampling: true
+tile_sample_exp: 0.5
+
+# ---- 早停 ----
+early_stop: true
+patience: 15
+
+# ---- 导出 ----
+save_val_on_best: true
+save_all_test_on_best: true
+save_pred_mask_png: true
+save_pred_vis_png: true
+
+# ---- 类别权重 (与 5ch 基线一致) ----
+class_weights: [0.1, 1.0]
