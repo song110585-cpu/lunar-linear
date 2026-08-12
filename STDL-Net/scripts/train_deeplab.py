@@ -4,7 +4,12 @@ R57: DeepLabV3+ 基线 (ResNet50 backbone)
 用法: python STDL-Net/scripts/train_deeplab.py
 """
 import os, sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _root)
+for _sub in ['utils', 'models', 'datasets']:
+    _p = os.path.join(_root, _sub)
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import torch
