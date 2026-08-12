@@ -93,7 +93,7 @@ def detect_env():
         data_root_v5 = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
 
         # R56+: v5 随机8:1:1 (train/val/test 独立目录, 优先于旧v5)
-        data_root_v5r = '/kaggle/input/datasets/changyasong/datasetv5_random811/datasetv5_random811'
+        data_root_v5r = '/kaggle/input/datasets/changyasong/v5data/datasetv5_random811'
         if os.path.isdir(data_root_v5r):
             data_root = data_root_v5r
             print(f'[Env] v5-Random811: {data_root}')
