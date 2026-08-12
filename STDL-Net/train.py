@@ -193,13 +193,15 @@ if __name__ == '__main__':
             self.train_batchsize = 4
             self.test_batchsize = 1
             self.accum_steps = 1
-            # ---- 数据路径 ----
-            self.train_image_dir = r'E:\月球_dataset\dataset\datasetv5\train\image'
-            self.train_mask_dir  = r'E:\月球_dataset\dataset\datasetv5\train\mask'
-            self.test_image_dir  = r'E:\月球_dataset\dataset\datasetv5\test\image'
-            self.test_mask_dir   = r'E:\月球_dataset\dataset\datasetv5\test\mask'
+            # ---- 数据路径 (随机8:1:1) ----
+            self.train_image_dir = r'E:\月球_dataset\dataset\datasetv5_random811\train\image'
+            self.train_mask_dir  = r'E:\月球_dataset\dataset\datasetv5_random811\train\mask'
+            self.val_image_dir   = r'E:\月球_dataset\dataset\datasetv5_random811\val\image'
+            self.val_mask_dir    = r'E:\月球_dataset\dataset\datasetv5_random811\val\mask'
+            self.test_image_dir  = r'E:\月球_dataset\dataset\datasetv5_random811\test\image'
+            self.test_mask_dir   = r'E:\月球_dataset\dataset\datasetv5_random811\test\mask'
             # ---- 输出路径 ----
-            self.record_path = r'E:\月球_dataset\output\result55'
+            self.record_path = r'E:\月球_dataset\output\result56'
             self.model_save_path = os.path.join(self.record_path, self.name + '.pt')
 
     hp = HyperParameter()
@@ -233,11 +235,20 @@ if __name__ == '__main__':
     train_data = MyDataset(
         images_dir=hp.train_image_dir,
         masks_dir=hp.train_mask_dir,
-        graben_erosion=True,  # 随机腐蚀 Graben → 模拟 Mare 细线
     )
     train_iter = DataLoader(
         dataset=train_data, batch_size=hp.train_batchsize,
         shuffle=True, drop_last=False,
+        num_workers=0, pin_memory=True,
+    )
+
+    val_data = MyDataset(
+        images_dir=hp.val_image_dir,
+        masks_dir=hp.val_mask_dir,
+    )
+    val_iter = DataLoader(
+        dataset=val_data, batch_size=hp.test_batchsize,
+        shuffle=False, drop_last=False,
         num_workers=0, pin_memory=True,
     )
 
@@ -251,7 +262,7 @@ if __name__ == '__main__':
         num_workers=0, pin_memory=True,
     )
 
-    print(f'训练集: {len(train_data)} 张,  测试集: {len(test_data)} 张')
+    print(f'训练集: {len(train_data)}  验证集: {len(val_data)}  测试集: {len(test_data)}')
 
     # =========================
     # 损失函数 (带类别权重的 CrossEntropyLoss)
@@ -279,7 +290,7 @@ if __name__ == '__main__':
     train(
         model=model,
         train_iter=train_iter,
-        val_iter=test_iter,
+        val_iter=val_iter,
         loss=loss,
         opt=opt,
         num_epochs=hp.num_epochs,
@@ -290,5 +301,16 @@ if __name__ == '__main__':
         max_steps=hp.max_steps,
     )
 
-    # 保存最终模型 (最优模型在 train() 里已单独保存)
+    # 保存最终模型
     torch.save(model, os.path.join(hp.record_path, hp.name + '_final.pt'))
+
+    # =========================
+    # 最终测试集评估
+    # =========================
+    print('\n' + '=' * 60)
+    print('最终测试集评估 (Test Set Evaluation)')
+    print('=' * 60)
+    net_test(model=model, test_iter=test_iter, loss=loss,
+             record_path=hp.record_path, num_classes=NUM_CLASSES,
+             epoch='final', save=True,
+             vis_mean=None, vis_std=None, max_steps=hp.max_steps)

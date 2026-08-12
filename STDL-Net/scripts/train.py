@@ -92,6 +92,26 @@ def detect_env():
         data_root_v6 = '/kaggle/input/datasets/changyasong/datasetv6/datasetv6'
         data_root_v5 = '/kaggle/input/datasets/changyasong/datasetv5/lunar-dataset/dataset'
 
+        # R56+: v5 随机8:1:1 (train/val/test 独立目录, 优先于旧v5)
+        data_root_v5r = '/kaggle/input/datasets/changyasong/datasetv5_random811/datasetv5_random811'
+        if os.path.isdir(data_root_v5r):
+            data_root = data_root_v5r
+            print(f'[Env] v5-Random811: {data_root}')
+            return {
+                'is_kaggle': True,
+                'train_image_dir': os.path.join(data_root, 'train', 'image'),
+                'train_mask_dir':  os.path.join(data_root, 'train', 'mask'),
+                'val_image_dir':   os.path.join(data_root, 'val',   'image'),
+                'val_mask_dir':    os.path.join(data_root, 'val',   'mask'),
+                'test_image_dir':  os.path.join(data_root, 'test',  'image'),
+                'test_mask_dir':   os.path.join(data_root, 'test',  'mask'),
+                'pretrain_dir':    os.path.join(data_root, 'pretrain'),
+                'record_path':     '/kaggle/working/result',
+                'train_valid_list': None,
+                'val_valid_list':   None,
+                'test_valid_list':  None,
+            }
+
         if os.path.isdir(data_root_v5):
             data_root = data_root_v5
             train_img_dir = os.path.join(data_root, 'train', 'image')
@@ -877,8 +897,13 @@ def train(hp: HyperParameter):
     print(f'Total params: {n_params:.1f}M, Trainable: {n_train:.1f}M')
 
     # ---- 数据集 ----
-    # 根据 in_channels 自适应 mean/std (1ch 用零均值单位方差, 5ch 用预计算值)
-    if len(CHANNEL_MEAN) >= hp.in_channels:
+    # 根据 in_channels 自适应 mean/std
+    # 5ch: 使用预计算的 WAC+DEM+Slope+TPI+Curv 统计值
+    # 1ch: Shade 已归一化到 [0,1], mean=0/std=1 即不做 z-score 变换
+    if hp.in_channels == 1:
+        ds_mean = [0.0]
+        ds_std  = [1.0]
+    elif hp.in_channels <= len(CHANNEL_MEAN):
         ds_mean = CHANNEL_MEAN[:hp.in_channels]
         ds_std  = CHANNEL_STD[:hp.in_channels]
     else:
