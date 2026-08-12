@@ -115,7 +115,7 @@ if __name__ == '__main__':
 
     # ---- Kaggle / 本地 路径自动检测 ----
     if os.path.isdir('/kaggle'):
-        DATA_ROOT = '/kaggle/input/datasets/changyasong/v5data/datasetv5_random811'
+        DATA_ROOT = '/kaggle/input/datasets/yuanssy/v5data/datasetv5_random811'
         RECORD_PATH = '/kaggle/working/result'
     else:
         DATA_ROOT = r'E:\月球_dataset\dataset\datasetv5_random811'
