@@ -7,7 +7,9 @@
       "Read(//e/月球_dataset/WR/output/mixed/R1/**)",
       "Read(//e/月球_dataset/WR/output/holdout/R1/**)",
       "Bash(ls -lh \"E:/月球_dataset/WR/raw/data_shade/\" 2>/dev/null || echo \"目录不存在或无法访问\")",
-      "Read(//e/月球_dataset/WR/raw/data_shade/**)"
+      "Read(//e/月球_dataset/WR/raw/data_shade/**)",
+      "Bash(ls -la \"E:\\\\月球_dataset\\\\output\\\\result56\" 2>/dev/null)",
+      "Read(//e/月球_dataset/output/result56/**)"
     ]
   }
 }

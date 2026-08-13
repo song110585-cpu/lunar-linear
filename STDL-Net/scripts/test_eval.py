@@ -1,6 +1,6 @@
 r"""
 用 best checkpoint 对独立测试集做评估，打印 mIoU 等指标。
-用法: python STDL-Net/scripts/test_eval.py 'E:\月球_dataset\output\result47'
+用法: python STDL-Net/scripts/test_eval.py 'E:\月球_dataset\output\result56'
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,7 +19,7 @@ from swinv2unet import Swin_LCSRB_DeformablePSP_FPNPAN
 import metrics
 
 # 默认本地 v10 路径
-_DEFAULT_DATA = r"E:\月球_dataset\dataset\datasetv10"
+_DEFAULT_DATA = r"E:\月球_dataset\dataset\datasetv5_random811"
 
 
 def main():
