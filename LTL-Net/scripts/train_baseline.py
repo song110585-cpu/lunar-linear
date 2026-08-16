@@ -121,18 +121,26 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='Unet',
                         help='smp 模型名: Unet/UnetPlusPlus/DeepLabV3/DeepLabV3Plus/PSPNet/Linknet/FPN/PAN/MAnet')
     parser.add_argument('--encoder', default='resnet50', help='backbone, 默认 resnet50')
+    parser.add_argument('--data-dir', default=None,
+                        help='数据集根目录(含 train/val/test 子目录), 默认自动检测 Kaggle/本地')
     args = parser.parse_args()
 
     NUM_CLASSES = 5
     IN_CHANNELS = 5
     IMG_SIZE = 512
 
-    # ---- Kaggle / 本地 路径自动检测 ----
-    if os.path.isdir('/kaggle'):
+    # ---- 路径: 命令行 --data-dir 优先, 否则自动检测 Kaggle/本地 ----
+    on_kaggle = os.path.isdir('/kaggle')
+    if args.data_dir:
+        DATA_ROOT = args.data_dir
+    elif on_kaggle:
         DATA_ROOT = '/kaggle/input/datasets/yuanssy/v5data/datasetv5_random811'
-        RECORD_PATH = f'/kaggle/working/result_{args.model}_{args.encoder}'
     else:
         DATA_ROOT = r'E:\月球_dataset\dataset\datasetv5_random811'
+
+    if on_kaggle:
+        RECORD_PATH = f'/kaggle/working/result_{args.model}_{args.encoder}'
+    else:
         RECORD_PATH = rf'E:\月球_dataset\output\baseline_{args.model}_{args.encoder}'
 
     class HyperParameter:
