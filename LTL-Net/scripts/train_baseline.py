@@ -13,7 +13,7 @@
 可选模型 (smp 现成, 均支持 encoder_name='resnet50'):
   Unet / UnetPlusPlus / DeepLabV3 / DeepLabV3Plus / PSPNet / Linknet / FPN / PAN / MAnet
 """
-import os, sys, argparse
+import os, sys, argparse, json, random, subprocess
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _root)
 for _sub in ['utils', 'models', 'datasets']:
@@ -35,11 +35,30 @@ import segmentation_models_pytorch as smp
 import metrics
 from MyDataset import MyDataset
 
+
+def set_seed(seed):
+    """固定 Python/NumPy/PyTorch/DataLoader 随机性，便于配对重复实验。"""
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True, warn_only=True)
+
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 # =========================
 # 工具函数 (复用 train_deeplab.py)
 # =========================
 def net_test(model, test_iter, loss, record_path, num_classes,
-             epoch='000', save=False, vis_mean=None, vis_std=None, max_steps=0):
+             epoch='000', save=False, vis_mean=None, vis_std=None, max_steps=0,
+             return_metrics=False):
     device = next(model.parameters()).device
     model.eval()
     test_epoch_loss = []
@@ -63,6 +82,11 @@ def net_test(model, test_iter, loss, record_path, num_classes,
     print('per-class IoU: ' + ', '.join(f'{v:.4f}' for v in m['iou_per_class']))
     print('per-class F1 : ' + ', '.join(f'{v:.4f}' for v in m['f1_per_class']))
     print('- ' * 30)
+    if return_metrics:
+        result = dict(m)
+        result['loss'] = test_epoch_loss
+        result['miou_fg'] = float(np.mean(m['iou_per_class'][1:]))
+        return result
     return m['miou']
 
 
@@ -123,7 +147,12 @@ if __name__ == '__main__':
     parser.add_argument('--encoder', default='resnet50', help='backbone, 默认 resnet50')
     parser.add_argument('--data-dir', default=None,
                         help='数据集根目录(含 train/val/test 子目录), 默认自动检测 Kaggle/本地')
+    parser.add_argument('--seed', type=int, default=42, help='训练随机种子')
+    parser.add_argument('--epochs', type=int, default=80, help='训练轮数')
+    parser.add_argument('--run-name', default=None, help='输出目录名称；默认由模型和seed生成')
     args = parser.parse_args()
+
+    set_seed(args.seed)
 
     NUM_CLASSES = 5
     IN_CHANNELS = 5
@@ -138,17 +167,18 @@ if __name__ == '__main__':
     else:
         DATA_ROOT = r'E:\月球_dataset\dataset\datasetv5_random811'
 
+    run_name = args.run_name or f'{args.model}_{args.encoder}_seed{args.seed}'
     if on_kaggle:
-        RECORD_PATH = f'/kaggle/working/result_{args.model}_{args.encoder}'
+        RECORD_PATH = f'/kaggle/working/result_{run_name}'
     else:
-        RECORD_PATH = rf'E:\月球_dataset\output\baseline_{args.model}_{args.encoder}'
+        RECORD_PATH = os.path.join(r'E:\月球_dataset\output', f'result_{run_name}')
 
     class HyperParameter:
         def __init__(self):
             curr_time = datetime.datetime.now()
             curr_time_str = curr_time.strftime("_%Y%m%d_%H%M%S")
             self.name = "_result" + curr_time_str
-            self.num_epochs = 80
+            self.num_epochs = args.epochs
             self.max_steps = 0
             self.learning_rate = 5e-5
             self.train_batchsize = 4
@@ -161,7 +191,7 @@ if __name__ == '__main__':
             self.test_image_dir  = os.path.join(DATA_ROOT, 'test',  'image')
             self.test_mask_dir   = os.path.join(DATA_ROOT, 'test',  'mask')
             self.record_path = RECORD_PATH
-            self.model_save_path = os.path.join(RECORD_PATH, self.name + '.pth')
+            self.model_save_path = os.path.join(RECORD_PATH, 'best_model.pth')
 
     hp = HyperParameter()
     os.makedirs(hp.record_path, exist_ok=True)
@@ -182,8 +212,11 @@ if __name__ == '__main__':
 
     # ---- 数据 ----
     train_data = MyDataset(hp.train_image_dir, hp.train_mask_dir)
+    loader_generator = torch.Generator()
+    loader_generator.manual_seed(args.seed)
     train_iter = DataLoader(train_data, batch_size=hp.train_batchsize, shuffle=True,
-                            drop_last=False, num_workers=0, pin_memory=True)
+                            drop_last=False, num_workers=0, pin_memory=True,
+                            worker_init_fn=seed_worker, generator=loader_generator)
     val_data = MyDataset(hp.val_image_dir, hp.val_mask_dir)
     val_iter = DataLoader(val_data, batch_size=hp.test_batchsize, shuffle=False,
                           drop_last=False, num_workers=0, pin_memory=True)
@@ -212,6 +245,28 @@ if __name__ == '__main__':
     print('=' * 60)
     best_state = torch.load(hp.model_save_path, map_location='cpu', weights_only=False)
     model.load_state_dict(best_state)
-    net_test(model=model, test_iter=test_iter, loss=loss,
-             record_path=hp.record_path, num_classes=NUM_CLASSES,
-             epoch='final', save=False, max_steps=hp.max_steps)
+    final_metrics = net_test(model=model, test_iter=test_iter, loss=loss,
+                             record_path=hp.record_path, num_classes=NUM_CLASSES,
+                             epoch='final', save=False, max_steps=hp.max_steps,
+                             return_metrics=True)
+    try:
+        git_commit = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'], cwd=_root, text=True
+        ).strip()
+    except Exception:
+        git_commit = 'unknown'
+    result = {
+        'model': args.model,
+        'encoder': args.encoder,
+        'seed': args.seed,
+        'epochs': args.epochs,
+        'data_root': DATA_ROOT,
+        'git_commit': git_commit,
+        'class_weights': class_weights.detach().cpu().tolist(),
+        'selection_metric': 'val_mIoU_all',
+        'test': final_metrics,
+    }
+    metrics_path = os.path.join(hp.record_path, 'metrics.json')
+    with open(metrics_path, 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    print(f'结果已保存: {metrics_path}')
