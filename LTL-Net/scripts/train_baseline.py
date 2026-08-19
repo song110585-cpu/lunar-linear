@@ -53,6 +53,21 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
+
+def load_checkpoint_state(checkpoint_path):
+    """读取纯 state_dict 或常见训练 checkpoint，并兼容 DataParallel 前缀。"""
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    if isinstance(checkpoint, dict):
+        for key in ('state_dict', 'model_state_dict'):
+            if key in checkpoint and isinstance(checkpoint[key], dict):
+                checkpoint = checkpoint[key]
+                break
+    if not isinstance(checkpoint, dict):
+        raise TypeError(f'checkpoint 不是可加载的 state_dict: {type(checkpoint).__name__}')
+    if checkpoint and all(str(key).startswith('module.') for key in checkpoint):
+        checkpoint = {str(key)[7:]: value for key, value in checkpoint.items()}
+    return checkpoint
+
 # =========================
 # 工具函数 (复用 train_deeplab.py)
 # =========================
@@ -150,7 +165,14 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, help='训练随机种子')
     parser.add_argument('--epochs', type=int, default=80, help='训练轮数')
     parser.add_argument('--run-name', default=None, help='输出目录名称；默认由模型和seed生成')
+    parser.add_argument('--eval-only', action='store_true',
+                        help='只加载 checkpoint 并评估 test，不进行训练')
+    parser.add_argument('--checkpoint', default=None,
+                        help='--eval-only 使用的模型权重路径；扩展名可以是 .pth/.pt/.zip')
     args = parser.parse_args()
+
+    if args.eval_only and not args.checkpoint:
+        parser.error('--eval-only 必须同时提供 --checkpoint')
 
     set_seed(args.seed)
 
@@ -204,47 +226,57 @@ if __name__ == '__main__':
     model_cls = getattr(smp, args.model)
     model = model_cls(
         encoder_name=args.encoder,
-        encoder_weights="imagenet",
+        encoder_weights=None if args.eval_only else "imagenet",
         in_channels=IN_CHANNELS,
         classes=NUM_CLASSES,
     ).to(device)
     print(f'Model: {args.model} ({args.encoder}), params: {sum(p.numel() for p in model.parameters()):,}')
 
     # ---- 数据 ----
-    train_data = MyDataset(hp.train_image_dir, hp.train_mask_dir)
-    loader_generator = torch.Generator()
-    loader_generator.manual_seed(args.seed)
-    train_iter = DataLoader(train_data, batch_size=hp.train_batchsize, shuffle=True,
-                            drop_last=False, num_workers=0, pin_memory=True,
-                            worker_init_fn=seed_worker, generator=loader_generator)
-    val_data = MyDataset(hp.val_image_dir, hp.val_mask_dir)
-    val_iter = DataLoader(val_data, batch_size=hp.test_batchsize, shuffle=False,
-                          drop_last=False, num_workers=0, pin_memory=True)
     test_data = MyDataset(hp.test_image_dir, hp.test_mask_dir)
     test_iter = DataLoader(test_data, batch_size=hp.test_batchsize, shuffle=False,
                            drop_last=False, num_workers=0, pin_memory=True)
-    print(f'Train: {len(train_data)}  Val: {len(val_data)}  Test: {len(test_data)}')
+    if args.eval_only:
+        train_iter = val_iter = None
+        print(f'Eval-only  Test: {len(test_data)}')
+    else:
+        train_data = MyDataset(hp.train_image_dir, hp.train_mask_dir)
+        loader_generator = torch.Generator()
+        loader_generator.manual_seed(args.seed)
+        train_iter = DataLoader(train_data, batch_size=hp.train_batchsize, shuffle=True,
+                                drop_last=False, num_workers=0, pin_memory=True,
+                                worker_init_fn=seed_worker, generator=loader_generator)
+        val_data = MyDataset(hp.val_image_dir, hp.val_mask_dir)
+        val_iter = DataLoader(val_data, batch_size=hp.test_batchsize, shuffle=False,
+                              drop_last=False, num_workers=0, pin_memory=True)
+        print(f'Train: {len(train_data)}  Val: {len(val_data)}  Test: {len(test_data)}')
 
     # ---- 损失 ----
     class_weights = torch.tensor([0.15, 1.0, 1.3, 1.8, 1.5], dtype=torch.float32).to(device)
     loss = nn.CrossEntropyLoss(weight=class_weights)
 
-    # ---- 优化器 ----
-    opt = optim.AdamW(model.parameters(), lr=hp.learning_rate)
-    scheduler = optim.lr_scheduler.StepLR(opt, step_size=30, gamma=0.1)
-
-    # ---- 训练 ----
-    train(model=model, train_iter=train_iter, val_iter=val_iter, loss=loss, opt=opt,
-          num_epochs=hp.num_epochs, record_path=hp.record_path, lr_scheduler=scheduler,
-          num_classes=NUM_CLASSES, accum_steps=hp.accum_steps, max_steps=hp.max_steps,
-          model_save_path=hp.model_save_path)
+    if args.eval_only:
+        checkpoint_path = os.path.abspath(args.checkpoint)
+        if not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(f'checkpoint 不存在: {checkpoint_path}')
+        print(f'加载 checkpoint: {checkpoint_path}')
+        model.load_state_dict(load_checkpoint_state(checkpoint_path), strict=True)
+    else:
+        # ---- 优化器与训练 ----
+        opt = optim.AdamW(model.parameters(), lr=hp.learning_rate)
+        scheduler = optim.lr_scheduler.StepLR(opt, step_size=30, gamma=0.1)
+        train(model=model, train_iter=train_iter, val_iter=val_iter, loss=loss, opt=opt,
+              num_epochs=hp.num_epochs, record_path=hp.record_path, lr_scheduler=scheduler,
+              num_classes=NUM_CLASSES, accum_steps=hp.accum_steps, max_steps=hp.max_steps,
+              model_save_path=hp.model_save_path)
+        checkpoint_path = hp.model_save_path
 
     # ---- 最终测试 ----
     print('\n' + '=' * 60)
     print('最终测试集评估 (Test Set Evaluation)')
     print('=' * 60)
-    best_state = torch.load(hp.model_save_path, map_location='cpu', weights_only=False)
-    model.load_state_dict(best_state)
+    if not args.eval_only:
+        model.load_state_dict(load_checkpoint_state(checkpoint_path), strict=True)
     final_metrics = net_test(model=model, test_iter=test_iter, loss=loss,
                              record_path=hp.record_path, num_classes=NUM_CLASSES,
                              epoch='final', save=False, max_steps=hp.max_steps,
@@ -264,6 +296,8 @@ if __name__ == '__main__':
         'git_commit': git_commit,
         'class_weights': class_weights.detach().cpu().tolist(),
         'selection_metric': 'val_mIoU_all',
+        'eval_only': args.eval_only,
+        'checkpoint': checkpoint_path,
         'test': final_metrics,
     }
     metrics_path = os.path.join(hp.record_path, 'metrics.json')
