@@ -3,7 +3,9 @@
 通道顺序: [WAC, DEM, Slope, TPI, 剖面曲率]
 类别约定: 0=背景, 1=皱脊, 2=月溪, 3=断层, 4=地堑
 """
+import json
 import os
+from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
@@ -12,9 +14,32 @@ import torch
 from torch.utils.data import Dataset
 
 
-# 归一化参数 (dataset_v6 训练集统计)
+# 旧数据集兼容回退值；新数据优先读取数据集根目录 normalization_stats.json。
 CHANNEL_MEAN = [0.14752520330929475, 0.5435313015308473, 0.25450968697236703, 0.49088401647752955, 0.45474516706141377]
 CHANNEL_STD  = [0.0911210905176962, 0.3889732754917122, 0.26804529406580985, 0.21175783334461448, 0.21851573588525747]
+
+
+def _load_normalization_stats(images_dir: str) -> Tuple[np.ndarray, np.ndarray, Optional[Path]]:
+    """从 <dataset_root>/normalization_stats.json 读取 Train-only 统计。"""
+    image_path = Path(images_dir).resolve()
+    candidates = [
+        image_path.parent.parent / "normalization_stats.json",  # root/split/image
+        image_path.parent / "normalization_stats.json",
+    ]
+    for stats_path in candidates:
+        if not stats_path.is_file():
+            continue
+        payload = json.loads(stats_path.read_text(encoding="utf-8"))
+        mean = np.asarray(payload["mean"], dtype=np.float32)
+        std = np.asarray(payload["std"], dtype=np.float32)
+        if mean.shape != (5,) or std.shape != (5,) or np.any(std <= 0):
+            raise ValueError(f"归一化统计格式无效: {stats_path}")
+        return mean, std, stats_path
+    return (
+        np.asarray(CHANNEL_MEAN, dtype=np.float32),
+        np.asarray(CHANNEL_STD, dtype=np.float32),
+        None,
+    )
 
 class MyDataset(Dataset):
     """
@@ -41,8 +66,19 @@ class MyDataset(Dataset):
         self.images_dir = images_dir
         self.masks_dir = masks_dir
 
-        self.mean = np.array(mean if mean is not None else CHANNEL_MEAN, dtype=np.float32)
-        self.std = np.array(std if std is not None else CHANNEL_STD, dtype=np.float32)
+        if (mean is None) != (std is None):
+            raise ValueError("mean 和 std 必须同时提供，或同时省略")
+        if mean is None:
+            self.mean, self.std, stats_path = _load_normalization_stats(images_dir)
+            if stats_path is None:
+                print("[MyDataset] 未找到 normalization_stats.json，使用旧数据集回退 mean/std")
+            else:
+                print(f"[MyDataset] normalization: {stats_path}")
+        else:
+            self.mean = np.asarray(mean, dtype=np.float32)
+            self.std = np.asarray(std, dtype=np.float32)
+            if self.mean.shape != (5,) or self.std.shape != (5,) or np.any(self.std <= 0):
+                raise ValueError("mean/std 必须是5个元素且 std 全部大于0")
 
         # image 和 mask 同名, 以 mask 目录为基准
         all_files = sorted(
@@ -85,6 +121,7 @@ class MyDataset(Dataset):
 
         # 将 nodata (-3.4e38 等极端值) 和 NaN/Inf 替换为 0
         bad = ~np.isfinite(image) | (image < -1e10)
+        invalid_pixels = np.any(bad, axis=0)
         image[bad] = 0.0
 
         # 按通道归一化 (mean=0, std=1 时等于不做归一化)
@@ -94,6 +131,8 @@ class MyDataset(Dataset):
         with rasterio.open(os.path.join(self.masks_dir, fname)) as src:
             mask = src.read(1).astype(np.int64)  # (H, W)
 
+        # 允许切片边缘最多5% NoData，但无影像位置不能参与构造监督或评价。
+        mask[invalid_pixels] = 0
         # 双保险: 把所有不在 0-4 范围的值都合并到 0（处理 99, 9 等异常值）
         mask[(mask > 4) | (mask < 0)] = 0
         # 5 类: 0=背景, 1=皱脊, 2=月溪, 3=断层, 4=地堑

@@ -141,6 +141,8 @@ if __name__ == '__main__':
     parser.add_argument('--detail-channels', type=int, default=16,
                         help='f1(1/2 细节特征) 降维后的通道数, 消融用 (默认 16)')
     parser.add_argument('--epochs', type=int, default=80, help='训练轮数')
+    parser.add_argument('--max-steps', type=int, default=0,
+                        help='每个 train/val/test 阶段最多运行的 batch 数；0 表示完整运行，仅用于冒烟测试')
     parser.add_argument('--data-dir', default=None,
                         help='数据集根目录(含 train/val/test 子目录), 默认自动检测 Kaggle/本地')
     parser.add_argument('--seed', type=int, default=42, help='训练随机种子')
@@ -174,7 +176,7 @@ if __name__ == '__main__':
             curr_time_str = curr_time.strftime("_%Y%m%d_%H%M%S")
             self.name = "_result" + curr_time_str
             self.num_epochs = args.epochs
-            self.max_steps = 0
+            self.max_steps = args.max_steps
             self.learning_rate = 5e-5
             self.train_batchsize = 4
             self.test_batchsize = 1
@@ -220,7 +222,7 @@ if __name__ == '__main__':
     print(f'Train: {len(train_data)}  Val: {len(val_data)}  Test: {len(test_data)}')
 
     # ---- 损失 (与 baseline 完全一致) ----
-    class_weights = torch.tensor([0.15, 1.0, 1.3, 1.8, 1.5], dtype=torch.float32).to(device)
+    class_weights = torch.tensor([0.15, 1.0, 2.73, 1.98, 2.12], dtype=torch.float32).to(device)
     loss = nn.CrossEntropyLoss(weight=class_weights)
 
     # ---- 优化器 (与 baseline 完全一致) ----
@@ -258,6 +260,7 @@ if __name__ == '__main__':
         'data_root': DATA_ROOT,
         'git_commit': git_commit,
         'class_weights': class_weights.detach().cpu().tolist(),
+        'max_steps': hp.max_steps,
         'selection_metric': 'val_mIoU_all',
         'test': final_metrics,
     }
