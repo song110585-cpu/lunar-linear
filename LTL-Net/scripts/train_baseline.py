@@ -162,6 +162,10 @@ if __name__ == '__main__':
     parser.add_argument('--encoder', default='resnet50', help='backbone, 默认 resnet50')
     parser.add_argument('--data-dir', default=None,
                         help='数据集根目录(含 train/val/test 子目录), 默认自动检测 Kaggle/本地')
+    parser.add_argument('--output-dir', default=None,
+                        help='结果根目录；每次运行会在其中创建 result_<run-name>，AutoDL建议使用/root/autodl-tmp/outputs')
+    parser.add_argument('--num-workers', type=int, default=0,
+                        help='DataLoader进程数；Windows/Kaggle默认0，AutoDL建议4')
     parser.add_argument('--seed', type=int, default=42, help='训练随机种子')
     parser.add_argument('--epochs', type=int, default=80, help='训练轮数')
     parser.add_argument('--max-steps', type=int, default=0,
@@ -192,8 +196,14 @@ if __name__ == '__main__':
         DATA_ROOT = r'E:\月球_dataset\dataset\datasetv5_random811'
 
     run_name = args.run_name or f'{args.model}_{args.encoder}_seed{args.seed}'
-    if on_kaggle:
+    if args.output_dir:
+        RECORD_PATH = os.path.join(
+            os.path.abspath(os.path.expanduser(args.output_dir)), f'result_{run_name}'
+        )
+    elif on_kaggle:
         RECORD_PATH = f'/kaggle/working/result_{run_name}'
+    elif os.path.isdir('/root/autodl-tmp'):
+        RECORD_PATH = f'/root/autodl-tmp/outputs/result_{run_name}'
     else:
         RECORD_PATH = os.path.join(r'E:\月球_dataset\output', f'result_{run_name}')
 
@@ -237,7 +247,7 @@ if __name__ == '__main__':
     # ---- 数据 ----
     test_data = MyDataset(hp.test_image_dir, hp.test_mask_dir)
     test_iter = DataLoader(test_data, batch_size=hp.test_batchsize, shuffle=False,
-                           drop_last=False, num_workers=0, pin_memory=True)
+                           drop_last=False, num_workers=args.num_workers, pin_memory=True)
     if args.eval_only:
         train_iter = val_iter = None
         print(f'Eval-only  Test: {len(test_data)}')
@@ -246,11 +256,11 @@ if __name__ == '__main__':
         loader_generator = torch.Generator()
         loader_generator.manual_seed(args.seed)
         train_iter = DataLoader(train_data, batch_size=hp.train_batchsize, shuffle=True,
-                                drop_last=False, num_workers=0, pin_memory=True,
+                                drop_last=False, num_workers=args.num_workers, pin_memory=True,
                                 worker_init_fn=seed_worker, generator=loader_generator)
         val_data = MyDataset(hp.val_image_dir, hp.val_mask_dir)
         val_iter = DataLoader(val_data, batch_size=hp.test_batchsize, shuffle=False,
-                              drop_last=False, num_workers=0, pin_memory=True)
+                              drop_last=False, num_workers=args.num_workers, pin_memory=True)
         print(f'Train: {len(train_data)}  Val: {len(val_data)}  Test: {len(test_data)}')
 
     # ---- 损失 ----
@@ -297,6 +307,7 @@ if __name__ == '__main__':
         'data_root': DATA_ROOT,
         'git_commit': git_commit,
         'class_weights': class_weights.detach().cpu().tolist(),
+        'num_workers': args.num_workers,
         'max_steps': hp.max_steps,
         'selection_metric': 'val_mIoU_all',
         'eval_only': args.eval_only,
