@@ -29,6 +29,7 @@ matplotlib.use('Agg')
 import metrics
 from MyDataset import MyDataset
 from models.ltl_net import LTLNet
+from experiment_artifacts import save_training_history
 
 
 def set_seed(seed):
@@ -90,6 +91,8 @@ def train(model, train_iter, val_iter, loss, opt, num_epochs, record_path, lr_sc
     device = next(model.parameters()).device
     scaler = torch.cuda.amp.GradScaler()
     best_miou = 0.0
+    best_epoch = 0
+    history = []
     for epoch in range(1, num_epochs + 1):
         model.train()
         train_epoch_loss = []
@@ -120,16 +123,39 @@ def train(model, train_iter, val_iter, loss, opt, num_epochs, record_path, lr_sc
         print('per-class IoU: ' + ', '.join(f'{v:.4f}' for v in m['iou_per_class']))
         print('- ' * 30)
 
-        lr_scheduler.step()
-        val_miou = net_test(model=model, test_iter=val_iter, loss=loss,
-                            record_path=record_path, num_classes=num_classes,
-                            epoch=str(epoch), save=False, max_steps=max_steps)
+        current_lr = float(opt.param_groups[0]['lr'])
+        val_result = net_test(model=model, test_iter=val_iter, loss=loss,
+                              record_path=record_path, num_classes=num_classes,
+                              epoch=str(epoch), save=False, max_steps=max_steps,
+                              return_metrics=True)
+        val_miou = val_result['miou']
 
-        if val_miou > best_miou:
+        is_best = val_miou > best_miou
+        if is_best:
             best_miou = val_miou
+            best_epoch = epoch
             if model_save_path:
                 torch.save(model.state_dict(), model_save_path)
             print(f'save best model at epoch {epoch}, mIoU={best_miou:.4f}')
+
+        history.append({
+            'epoch': epoch,
+            'learning_rate': current_lr,
+            'train_loss': train_epoch_loss,
+            'train_accuracy': m['accuracy'],
+            'train_miou': m['miou'],
+            'train_miou_fg': float(np.mean(m['iou_per_class'][1:])),
+            'train_mf1': m['mf1'],
+            'val_loss': val_result['loss'],
+            'val_accuracy': val_result['accuracy'],
+            'val_miou': val_result['miou'],
+            'val_miou_fg': val_result['miou_fg'],
+            'val_mf1': val_result['mf1'],
+            'is_best': int(is_best),
+        })
+        save_training_history(history, record_path)
+        lr_scheduler.step()
+    return {'best_epoch': best_epoch, 'best_val_miou': best_miou, 'history': history}
 
 
 # =========================
@@ -240,10 +266,10 @@ if __name__ == '__main__':
     scheduler = optim.lr_scheduler.StepLR(opt, step_size=30, gamma=0.1)
 
     # ---- 训练 ----
-    train(model=model, train_iter=train_iter, val_iter=val_iter, loss=loss, opt=opt,
-          num_epochs=hp.num_epochs, record_path=hp.record_path, lr_scheduler=scheduler,
-          num_classes=NUM_CLASSES, accum_steps=hp.accum_steps, max_steps=hp.max_steps,
-          model_save_path=hp.model_save_path)
+    train_summary = train(model=model, train_iter=train_iter, val_iter=val_iter, loss=loss, opt=opt,
+                          num_epochs=hp.num_epochs, record_path=hp.record_path, lr_scheduler=scheduler,
+                          num_classes=NUM_CLASSES, accum_steps=hp.accum_steps, max_steps=hp.max_steps,
+                          model_save_path=hp.model_save_path)
 
     # ---- 最终测试 ----
     print('\n' + '=' * 60)
@@ -273,6 +299,9 @@ if __name__ == '__main__':
         'num_workers': args.num_workers,
         'max_steps': hp.max_steps,
         'selection_metric': 'val_mIoU_all',
+        'best_epoch': train_summary['best_epoch'],
+        'best_val_miou': train_summary['best_val_miou'],
+        'history_file': 'history.csv',
         'test': final_metrics,
     }
     metrics_path = os.path.join(hp.record_path, 'metrics.json')
