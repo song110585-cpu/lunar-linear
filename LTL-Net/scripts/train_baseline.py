@@ -35,6 +35,7 @@ import segmentation_models_pytorch as smp
 import metrics
 from MyDataset import MyDataset
 from experiment_artifacts import save_training_history
+from models.dlinknet import DLinkNet
 
 
 def set_seed(seed):
@@ -110,7 +111,7 @@ def train(model, train_iter, val_iter, loss, opt, num_epochs, record_path, lr_sc
           num_classes=5, accum_steps=1, max_steps=0, model_save_path=None):
     device = next(model.parameters()).device
     scaler = torch.cuda.amp.GradScaler()
-    best_miou = 0.0
+    best_miou_fg = 0.0
     best_epoch = 0
     history = []
     for epoch in range(1, num_epochs + 1):
@@ -148,15 +149,15 @@ def train(model, train_iter, val_iter, loss, opt, num_epochs, record_path, lr_sc
                               record_path=record_path, num_classes=num_classes,
                               epoch=str(epoch), save=False, max_steps=max_steps,
                               return_metrics=True)
-        val_miou = val_result['miou']
+        val_miou_fg = val_result['miou_fg']
 
-        is_best = val_miou > best_miou
+        is_best = val_miou_fg > best_miou_fg
         if is_best:
-            best_miou = val_miou
+            best_miou_fg = val_miou_fg
             best_epoch = epoch
             if model_save_path:
                 torch.save(model.state_dict(), model_save_path)
-            print(f'save best model at epoch {epoch}, mIoU={best_miou:.4f}')
+            print(f'save best model at epoch {epoch}, val_mIoU_fg={best_miou_fg:.4f}')
 
         history.append({
             'epoch': epoch,
@@ -175,7 +176,7 @@ def train(model, train_iter, val_iter, loss, opt, num_epochs, record_path, lr_sc
         })
         save_training_history(history, record_path)
         lr_scheduler.step()
-    return {'best_epoch': best_epoch, 'best_val_miou': best_miou, 'history': history}
+    return {'best_epoch': best_epoch, 'best_val_miou_fg': best_miou_fg, 'history': history}
 
 
 # =========================
@@ -184,7 +185,7 @@ def train(model, train_iter, val_iter, loss, opt, num_epochs, record_path, lr_sc
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='Unet',
-                        help='smp 模型名: Unet/UnetPlusPlus/DeepLabV3/DeepLabV3Plus/PSPNet/Linknet/FPN/PAN/MAnet')
+                        help='模型名: DLinkNet，或smp的Unet/UnetPlusPlus/DeepLabV3/DeepLabV3Plus/PSPNet/Linknet/FPN/PAN/MAnet')
     parser.add_argument('--encoder', default='resnet50', help='backbone, 默认 resnet50')
     parser.add_argument('--data-dir', default=None,
                         help='数据集根目录(含 train/val/test 子目录), 默认自动检测 Kaggle/本地')
@@ -192,6 +193,10 @@ if __name__ == '__main__':
                         help='结果根目录；每次运行会在其中创建 result_<run-name>，AutoDL建议使用/root/autodl-tmp/outputs')
     parser.add_argument('--num-workers', type=int, default=0,
                         help='DataLoader进程数；Windows/Kaggle默认0，AutoDL建议4')
+    parser.add_argument('--batch-size', type=int, default=4,
+                        help='训练物理batch size；DLinkNet-ResNet50显存占用大，建议2')
+    parser.add_argument('--accum-steps', type=int, default=1,
+                        help='梯度累积步数；有效batch size=batch-size*accum-steps')
     parser.add_argument('--seed', type=int, default=42, help='训练随机种子')
     parser.add_argument('--epochs', type=int, default=80, help='训练轮数')
     parser.add_argument('--max-steps', type=int, default=0,
@@ -241,9 +246,9 @@ if __name__ == '__main__':
             self.num_epochs = args.epochs
             self.max_steps = args.max_steps
             self.learning_rate = 5e-5
-            self.train_batchsize = 4
+            self.train_batchsize = args.batch_size
             self.test_batchsize = 1
-            self.accum_steps = 1
+            self.accum_steps = args.accum_steps
             self.train_image_dir = os.path.join(DATA_ROOT, 'train', 'image')
             self.train_mask_dir  = os.path.join(DATA_ROOT, 'train', 'mask')
             self.val_image_dir   = os.path.join(DATA_ROOT, 'val',   'image')
@@ -259,15 +264,23 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'device:{device}     GPU available:{torch.cuda.is_available()}')
 
-    # ---- 模型 (动态构建) ----
-    assert hasattr(smp, args.model), f'smp 没有模型 {args.model}'
-    model_cls = getattr(smp, args.model)
-    model = model_cls(
-        encoder_name=args.encoder,
-        encoder_weights=None if args.eval_only else "imagenet",
-        in_channels=IN_CHANNELS,
-        classes=NUM_CLASSES,
-    ).to(device)
+    # ---- 模型 (D-LinkNet或SMP baseline) ----
+    if args.model.lower() in ('dlinknet', 'd-linknet'):
+        model = DLinkNet(
+            encoder_name=args.encoder,
+            encoder_weights=None if args.eval_only else "imagenet",
+            in_channels=IN_CHANNELS,
+            classes=NUM_CLASSES,
+        ).to(device)
+    else:
+        assert hasattr(smp, args.model), f'smp 没有模型 {args.model}'
+        model_cls = getattr(smp, args.model)
+        model = model_cls(
+            encoder_name=args.encoder,
+            encoder_weights=None if args.eval_only else "imagenet",
+            in_channels=IN_CHANNELS,
+            classes=NUM_CLASSES,
+        ).to(device)
     print(f'Model: {args.model} ({args.encoder}), params: {sum(p.numel() for p in model.parameters()):,}')
 
     # ---- 数据 ----
@@ -336,10 +349,13 @@ if __name__ == '__main__':
         'git_commit': git_commit,
         'class_weights': class_weights.detach().cpu().tolist(),
         'num_workers': args.num_workers,
+        'batch_size': hp.train_batchsize,
+        'accum_steps': hp.accum_steps,
+        'effective_batch_size': hp.train_batchsize * hp.accum_steps,
         'max_steps': hp.max_steps,
-        'selection_metric': 'val_mIoU_all',
+        'selection_metric': 'val_mIoU_fg',
         'best_epoch': None if train_summary is None else train_summary['best_epoch'],
-        'best_val_miou': None if train_summary is None else train_summary['best_val_miou'],
+        'best_val_miou_fg': None if train_summary is None else train_summary['best_val_miou_fg'],
         'history_file': None if train_summary is None else 'history.csv',
         'eval_only': args.eval_only,
         'checkpoint': checkpoint_path,

@@ -25,6 +25,7 @@ from tqdm import tqdm
 
 import metrics
 from MyDataset import MyDataset
+from models.dlinknet import DLinkNet
 from models.ltl_net import LTLNet
 
 
@@ -55,6 +56,13 @@ def build_model(args):
             in_channels=5,
             classes=5,
             highres_detail_channels=args.detail_channels,
+        )
+    if args.model.lower() in ("dlinknet", "d-linknet"):
+        return DLinkNet(
+            encoder_name=args.encoder,
+            encoder_weights=None,
+            in_channels=5,
+            classes=5,
         )
     if not hasattr(smp, args.model):
         raise ValueError(f"segmentation_models_pytorch 中不存在模型: {args.model}")
@@ -178,7 +186,7 @@ def save_qualitative(model, dataset, names, output_dir, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="LTLNet",
-                        help="LTLNet 或 smp 模型名，如 DeepLabV3Plus/Unet/Linknet")
+                        help="LTLNet、DLinkNet，或smp模型名，如DeepLabV3Plus/Unet/Linknet")
     parser.add_argument("--encoder", default="resnet50")
     parser.add_argument("--detail-channels", type=int, default=16)
     parser.add_argument("--data-dir", required=True, help="含 test/image 与 test/mask 的数据集根目录")
