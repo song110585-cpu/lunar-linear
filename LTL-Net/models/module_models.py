@@ -44,6 +44,14 @@ class _DeepLabResNet50Base(nn.Module):
         return features, self.decoder(features)
 
 
+class DeepLabResNet50(_DeepLabResNet50Base):
+    """Unmodified DeepLabV3+-ResNet50 control for the module training protocol."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        _, decoded = self._features(x)
+        return self.segmentation_head(decoded)
+
+
 class DSConvResNet50(_DeepLabResNet50Base):
     """DeepLabV3+-ResNet50 plus residual Dynamic Snake refinement."""
 
@@ -149,6 +157,8 @@ class GatedBoundaryResNet50(_DeepLabResNet50Base):
 
 def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> nn.Module:
     normalized = name.strip().lower().replace("-", "_")
+    if normalized in {"deeplab", "deeplabv3plus", "deeplab_resnet50"}:
+        return DeepLabResNet50(encoder_weights=encoder_weights)
     if normalized in {"dsconv", "dsconv_resnet50"}:
         return DSConvResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_boundary", "gated_boundary_resnet50"}:

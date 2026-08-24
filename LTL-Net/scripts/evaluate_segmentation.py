@@ -20,6 +20,7 @@ import numpy as np
 import segmentation_models_pytorch as smp
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -27,9 +28,12 @@ import metrics
 from MyDataset import MyDataset
 from models.dlinknet import DLinkNet
 from models.ltl_net import LTLNet
+from models.module_models import build_module_model
+from train_module_experiment import masks_to_boundaries
 
 
 CLASS_NAMES = ["Background", "WR", "Rille", "Fault", "Graben"]
+MODULE_MODEL_NAMES = {"deeplab", "dsconv", "gated_boundary"}
 LABEL_CMAP = ListedColormap(["#111111", "#f4d03f", "#2e86de", "#e74c3c", "#af7ac5"])
 ERROR_CMAP = ListedColormap(["#111111", "#e74c3c", "#3498db", "#f1c40f"])
 
@@ -49,6 +53,9 @@ def load_checkpoint_state(checkpoint_path):
 
 
 def build_model(args):
+    normalized = args.model.lower().replace("-", "_")
+    if normalized in MODULE_MODEL_NAMES:
+        return build_module_model(normalized, encoder_weights=None)
     if args.model.lower() in ("ltl", "ltlnet", "ltl-net"):
         return LTLNet(
             encoder_name=args.encoder,
@@ -74,21 +81,34 @@ def build_model(args):
     )
 
 
-def save_confusion_plot(hist, output_path, normalized):
+def save_confusion_plot(hist, output_path, normalization=None):
     values = hist.astype(np.float64)
-    if normalized:
+    if normalization == "row":
         values = values / np.maximum(values.sum(axis=1, keepdims=True), 1.0)
+    elif normalization == "column":
+        values = values / np.maximum(values.sum(axis=0, keepdims=True), 1.0)
     fig, ax = plt.subplots(figsize=(6.8, 5.8), dpi=180)
-    image = ax.imshow(values, cmap="Blues", vmin=0, vmax=1 if normalized else None)
+    image = ax.imshow(
+        values, cmap="Blues", vmin=0, vmax=1 if normalization else None
+    )
     ax.set_xticks(range(5), CLASS_NAMES, rotation=35, ha="right")
     ax.set_yticks(range(5), CLASS_NAMES)
     ax.set_xlabel("Predicted class")
     ax.set_ylabel("True class")
-    ax.set_title("Row-normalized confusion matrix" if normalized else "Confusion matrix (pixels)")
+    titles = {
+        None: "Confusion matrix (pixels)",
+        "row": "Row-normalized confusion matrix",
+        "column": "Column-normalized confusion matrix",
+    }
+    ax.set_title(titles[normalization])
     threshold = values.max() * 0.55 if values.size else 0
     for row in range(5):
         for col in range(5):
-            text_value = f"{values[row, col]:.3f}" if normalized else f"{int(values[row, col]):,}"
+            text_value = (
+                f"{values[row, col]:.3f}"
+                if normalization
+                else f"{int(values[row, col]):,}"
+            )
             ax.text(col, row, text_value, ha="center", va="center",
                     fontsize=7.5, color="white" if values[row, col] > threshold else "black")
     fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
@@ -147,17 +167,91 @@ def make_error_map(target, pred):
     return error
 
 
-def save_qualitative(model, dataset, names, output_dir, device):
+def foreground_binary_confusion(hist):
+    """Collapse a multiclass matrix into [[TN, FP], [FN, TP]]."""
+    hist = np.asarray(hist, dtype=np.int64)
+    return np.asarray(
+        [
+            [hist[0, 0], hist[0, 1:].sum()],
+            [hist[1:, 0].sum(), hist[1:, 1:].sum()],
+        ],
+        dtype=np.int64,
+    )
+
+
+def binary_boundaries(mask):
+    """One-pixel boundaries of a binary foreground mask."""
+    mask = mask.bool()
+    boundary = torch.zeros_like(mask)
+    vertical = mask[:, 1:, :] != mask[:, :-1, :]
+    horizontal = mask[:, :, 1:] != mask[:, :, :-1]
+    boundary[:, 1:, :] |= vertical
+    boundary[:, :-1, :] |= vertical
+    boundary[:, :, 1:] |= horizontal
+    boundary[:, :, :-1] |= horizontal
+    return boundary
+
+
+def update_boundary_counts(counts, predictions, targets, tolerances):
+    pred_boundary = binary_boundaries(predictions > 0)[:, None].float()
+    target_boundary = binary_boundaries(targets > 0)[:, None].float()
+    for tolerance in tolerances:
+        kernel = 2 * tolerance + 1
+        target_dilated = F.max_pool2d(
+            target_boundary, kernel_size=kernel, stride=1, padding=tolerance
+        ).bool()
+        pred_dilated = F.max_pool2d(
+            pred_boundary, kernel_size=kernel, stride=1, padding=tolerance
+        ).bool()
+        entry = counts.setdefault(
+            tolerance,
+            {"matched_pred": 0, "pred": 0, "matched_target": 0, "target": 0},
+        )
+        pred_bool = pred_boundary.bool()
+        target_bool = target_boundary.bool()
+        entry["matched_pred"] += int((pred_bool & target_dilated).sum())
+        entry["pred"] += int(pred_bool.sum())
+        entry["matched_target"] += int((target_bool & pred_dilated).sum())
+        entry["target"] += int(target_bool.sum())
+
+
+def summarize_boundary_counts(counts):
+    result = {}
+    for tolerance, entry in counts.items():
+        precision = entry["matched_pred"] / max(entry["pred"], 1)
+        recall = entry["matched_target"] / max(entry["target"], 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+        result[str(tolerance)] = {
+            **entry,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+    return result
+
+
+def forward_outputs(model, images, model_name):
+    normalized = model_name.lower().replace("-", "_")
+    if normalized == "gated_boundary":
+        outputs = model.forward_with_aux(images)
+        return outputs["logits"], outputs["boundary_logits"]
+    return model(images), None
+
+
+def save_qualitative(model, model_name, split, dataset, names, output_dir, device):
     output_dir.mkdir(parents=True, exist_ok=True)
     stem_to_index = {Path(name).stem: index for index, name in enumerate(dataset.filenames)}
     model.eval()
     for name in names:
         if name not in stem_to_index:
-            print(f"[warning] 定性样本不在 test 集: {name}")
+            print(f"[warning] 定性样本不在 {split} 集: {name}")
             continue
         image, target, _ = dataset[stem_to_index[name]]
-        with torch.no_grad(), torch.cuda.amp.autocast(enabled=device.type == "cuda"):
-            pred = model(image.unsqueeze(0).to(device)).argmax(dim=1)[0].cpu().numpy()
+        with torch.no_grad(), torch.amp.autocast(
+            "cuda", enabled=device.type == "cuda"
+        ):
+            logits, _ = forward_outputs(model, image.unsqueeze(0).to(device), model_name)
+            pred = logits.argmax(dim=1)[0].cpu().numpy()
         target_np = target.numpy()
         wac = image[0].numpy() * float(dataset.std[0]) + float(dataset.mean[0])
         finite = np.isfinite(wac)
@@ -189,11 +283,14 @@ def main():
                         help="LTLNet、DLinkNet，或smp模型名，如DeepLabV3Plus/Unet/Linknet")
     parser.add_argument("--encoder", default="resnet50")
     parser.add_argument("--detail-channels", type=int, default=16)
-    parser.add_argument("--data-dir", required=True, help="含 test/image 与 test/mask 的数据集根目录")
+    parser.add_argument("--data-dir", required=True, help="含 split/image 与 split/mask 的数据集根目录")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--split", choices=("train", "val", "test"), default="test")
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--max-steps", type=int, default=0)
+    parser.add_argument("--skip-qualitative", action="store_true")
     parser.add_argument("--samples-per-group", type=int, default=4)
     parser.add_argument("--sample-names-file", default=None,
                         help="可选：固定样本 stem 列表；跨模型对比时使用同一文件")
@@ -209,7 +306,10 @@ def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = build_model(args).to(device)
     model.load_state_dict(load_checkpoint_state(checkpoint_path), strict=True)
-    dataset = MyDataset(str(data_root / "test" / "image"), str(data_root / "test" / "mask"))
+    dataset = MyDataset(
+        str(data_root / args.split / "image"),
+        str(data_root / args.split / "mask"),
+    )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
                         num_workers=args.num_workers, pin_memory=device.type == "cuda")
     loss_fn = nn.CrossEntropyLoss(
@@ -217,18 +317,50 @@ def main():
     )
 
     total_hist = np.zeros((5, 5), dtype=np.int64)
+    boundary_counts = {}
+    auxiliary_boundary_hist = np.zeros((2, 2), dtype=np.int64)
+    auxiliary_boundary_pixels = 0
+    gate_stats = {"sum": 0.0, "sum_sq": 0.0, "count": 0, "low": 0, "high": 0}
+    hook_handle = None
+    if args.model.lower().replace("-", "_") == "gated_boundary":
+        def capture_gate(_module, _inputs, output):
+            values = output.detach().float()
+            gate_stats["sum"] += float(values.sum())
+            gate_stats["sum_sq"] += float((values * values).sum())
+            gate_stats["count"] += values.numel()
+            gate_stats["low"] += int((values < 0.05).sum())
+            gate_stats["high"] += int((values > 0.95).sum())
+
+        hook_handle = model.boundary_refinement.gate.register_forward_hook(capture_gate)
     losses = []
     rows = []
     model.eval()
     with torch.no_grad():
-        for images, targets, names in tqdm(loader, desc="Evaluate test", unit="batch"):
+        for step, (images, targets, names) in enumerate(
+            tqdm(loader, desc=f"Evaluate {args.split}", unit="batch")
+        ):
+            if args.max_steps and step >= args.max_steps:
+                break
             images = images.to(device)
             targets_device = targets.to(device)
-            with torch.cuda.amp.autocast(enabled=device.type == "cuda"):
-                logits = model(images)
+            with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+                logits, boundary_logits = forward_outputs(model, images, args.model)
                 batch_loss = loss_fn(logits, targets_device)
             losses.append(float(batch_loss.item()))
             preds = logits.argmax(dim=1).cpu()
+            update_boundary_counts(boundary_counts, preds, targets, (1, 2, 4, 8))
+            if boundary_logits is not None:
+                boundary_targets = masks_to_boundaries(
+                    targets_device, boundary_logits.shape[-2:]
+                ).bool()
+                boundary_predictions = boundary_logits.sigmoid() >= 0.5
+                target_flat = boundary_targets.view(-1)
+                pred_flat = boundary_predictions.view(-1)
+                auxiliary_boundary_hist[0, 0] += int((~target_flat & ~pred_flat).sum())
+                auxiliary_boundary_hist[0, 1] += int((~target_flat & pred_flat).sum())
+                auxiliary_boundary_hist[1, 0] += int((target_flat & ~pred_flat).sum())
+                auxiliary_boundary_hist[1, 1] += int((target_flat & pred_flat).sum())
+                auxiliary_boundary_pixels += target_flat.numel()
             for index, name in enumerate(names):
                 hist = metrics.multiclass_confusion(preds[index], targets[index], 5).numpy()
                 total_hist += hist
@@ -236,23 +368,59 @@ def main():
                 rows.append({
                     "name": name,
                     "foreground_ratio": float(np.mean(target_np > 0)),
+                    "predicted_foreground_ratio": float(np.mean(preds[index].numpy() > 0)),
                     "present_classes": ",".join(str(v) for v in np.unique(target_np[target_np > 0])),
                     "tile_miou_fg_present": tile_foreground_iou(hist),
+                    "foreground_fp_pixels": int(hist[0, 1:].sum()),
+                    "foreground_fn_pixels": int(hist[1:, 0].sum()),
+                    "wrong_foreground_pixels": int(
+                        hist[1:, 1:].sum() - np.diag(hist)[1:].sum()
+                    ),
                 })
+
+    if hook_handle is not None:
+        hook_handle.remove()
 
     result = metrics.metrics_from_hist(torch.from_numpy(total_hist))
     result["loss"] = float(np.mean(losses))
     result["miou_fg"] = float(np.mean(result["iou_per_class"][1:]))
+    binary_hist = foreground_binary_confusion(total_hist)
+    boundary_metrics = summarize_boundary_counts(boundary_counts)
     payload = {
         "model": args.model,
         "encoder": args.encoder,
         "detail_channels": args.detail_channels if args.model.lower() in ("ltl", "ltlnet", "ltl-net") else None,
         "checkpoint": str(checkpoint_path),
         "data_root": str(data_root),
+        "split": args.split,
         "class_names": CLASS_NAMES,
         "confusion_matrix": total_hist.tolist(),
-        "test": result,
+        "foreground_binary_confusion": binary_hist.tolist(),
+        "foreground_boundary_metrics": boundary_metrics,
+        "metrics": result,
     }
+    payload[args.split] = result
+    if auxiliary_boundary_pixels:
+        tn, fp, fn, tp = auxiliary_boundary_hist.ravel().tolist()
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        payload["gated_boundary_head"] = {
+            "confusion_matrix": auxiliary_boundary_hist.tolist(),
+            "target_positive_ratio": (tp + fn) / auxiliary_boundary_pixels,
+            "predicted_positive_ratio": (tp + fp) / auxiliary_boundary_pixels,
+            "precision": precision,
+            "recall": recall,
+            "f1": 2 * precision * recall / max(precision + recall, 1e-12),
+        }
+    if gate_stats["count"]:
+        mean = gate_stats["sum"] / gate_stats["count"]
+        variance = max(gate_stats["sum_sq"] / gate_stats["count"] - mean * mean, 0.0)
+        payload["gate_activation"] = {
+            "mean": mean,
+            "std": variance ** 0.5,
+            "fraction_below_0_05": gate_stats["low"] / gate_stats["count"],
+            "fraction_above_0_95": gate_stats["high"] / gate_stats["count"],
+        }
     (output_dir / "evaluation_metrics.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -261,8 +429,15 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    save_confusion_plot(total_hist, output_dir / "confusion_matrix_counts.png", normalized=False)
-    save_confusion_plot(total_hist, output_dir / "confusion_matrix_normalized.png", normalized=True)
+    save_confusion_plot(total_hist, output_dir / "confusion_matrix_counts.png")
+    save_confusion_plot(
+        total_hist, output_dir / "confusion_matrix_row_normalized.png", normalization="row"
+    )
+    save_confusion_plot(
+        total_hist,
+        output_dir / "confusion_matrix_column_normalized.png",
+        normalization="column",
+    )
     save_per_class_plot(result, output_dir / "per_class_metrics.png")
 
     if args.sample_names_file:
@@ -276,12 +451,25 @@ def main():
     ranked.sort(key=lambda row: (row["tile_miou_fg_present"], row["name"]))
     hard = [row["name"] for row in ranked[:args.samples_per_group]]
     best = [row["name"] for row in ranked[-args.samples_per_group:]]
-    save_qualitative(model, dataset, representative, output_dir / "qualitative" / "representative", device)
-    save_qualitative(model, dataset, best, output_dir / "qualitative" / "best", device)
-    save_qualitative(model, dataset, hard, output_dir / "qualitative" / "hard_cases", device)
+    if not args.skip_qualitative:
+        save_qualitative(
+            model, args.model, args.split, dataset, representative,
+            output_dir / "qualitative" / "representative", device,
+        )
+        save_qualitative(
+            model, args.model, args.split, dataset, best,
+            output_dir / "qualitative" / "best", device,
+        )
+        save_qualitative(
+            model, args.model, args.split, dataset, hard,
+            output_dir / "qualitative" / "hard_cases", device,
+        )
 
     print(f"完成: {output_dir}")
-    print(f"test mIoU={result['miou']:.4f}, foreground mIoU={result['miou_fg']:.4f}, mF1={result['mf1']:.4f}")
+    print(
+        f"{args.split} mIoU={result['miou']:.4f}, "
+        f"foreground mIoU={result['miou_fg']:.4f}, mF1={result['mf1']:.4f}"
+    )
 
 
 if __name__ == "__main__":

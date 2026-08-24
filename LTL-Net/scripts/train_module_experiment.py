@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,6 +38,12 @@ from models.module_models import build_module_model  # noqa: E402
 
 
 CLASS_WEIGHTS = [0.15, 1.0, 2.73, 1.98, 2.12]
+DATA_METADATA_FILES = (
+    "dataset_protocol.json",
+    "dataset_summary.json",
+    "normalization_stats.json",
+    "tile_manifest.csv",
+)
 
 
 def set_seed(seed: int) -> None:
@@ -54,6 +61,17 @@ def seed_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % 2**32
     random.seed(worker_seed)
     np.random.seed(worker_seed)
+
+
+def fingerprint_dataset_metadata(data_root: Path) -> dict[str, str]:
+    """Hash split-defining metadata so runs on separate accounts are comparable."""
+    fingerprints: dict[str, str] = {}
+    for name in DATA_METADATA_FILES:
+        path = data_root / name
+        if not path.is_file():
+            raise FileNotFoundError(f"missing dataset metadata required for fingerprint: {path}")
+        fingerprints[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return fingerprints
 
 
 def masks_to_boundaries(labels: torch.Tensor, output_size: tuple[int, int]) -> torch.Tensor:
@@ -174,7 +192,8 @@ def train(args: argparse.Namespace) -> dict:
         pin_memory=device.type == "cuda",
     )
 
-    model = build_module_model(args.module, encoder_weights="imagenet").to(device)
+    encoder_weights = None if args.encoder_weights.lower() == "none" else args.encoder_weights
+    model = build_module_model(args.module, encoder_weights=encoder_weights).to(device)
     with_aux = args.module == "gated_boundary"
     criterion = ExperimentLoss(args.module, args.boundary_weight).to(device)
     optimizer = AdamW(model.parameters(), lr=args.learning_rate)
@@ -187,6 +206,7 @@ def train(args: argparse.Namespace) -> dict:
     config = vars(args).copy()
     config.update(
         data_dir=str(data_root),
+        dataset_metadata_sha256=fingerprint_dataset_metadata(data_root),
         output_dir=str(output_dir),
         device=str(device),
         parameter_count=sum(p.numel() for p in model.parameters()),
@@ -205,6 +225,8 @@ def train(args: argparse.Namespace) -> dict:
         optimizer.zero_grad(set_to_none=True)
         train_hist = torch.zeros(5, 5, dtype=torch.float64)
         train_losses: list[float] = []
+        train_semantic_losses: list[float] = []
+        train_boundary_losses: list[float] = []
         for step, (images, labels, _) in enumerate(
             tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}", unit="batch")
         ):
@@ -213,14 +235,23 @@ def train(args: argparse.Namespace) -> dict:
             images, labels = images.to(device), labels.to(device)
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 logits, boundary_logits = model_outputs(model, images, with_aux)
-                full_loss, _ = criterion(logits, labels, boundary_logits)
+                full_loss, parts = criterion(logits, labels, boundary_logits)
                 loss = full_loss / args.accum_steps
             scaler.scale(loss).backward()
-            if (step + 1) % args.accum_steps == 0 or (step + 1) == len(train_loader):
+            reached_requested_limit = bool(
+                args.max_steps and (step + 1) >= args.max_steps
+            )
+            if (
+                (step + 1) % args.accum_steps == 0
+                or (step + 1) == len(train_loader)
+                or reached_requested_limit
+            ):
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
             train_losses.append(float(full_loss.detach()))
+            train_semantic_losses.append(parts["semantic_loss"])
+            train_boundary_losses.append(parts["boundary_loss"])
             train_hist += metrics.multiclass_confusion(logits.argmax(1), labels, 5).double()
 
         train_metrics = summarize_hist(train_hist)
@@ -235,11 +266,15 @@ def train(args: argparse.Namespace) -> dict:
             "epoch": epoch,
             "learning_rate": float(optimizer.param_groups[0]["lr"]),
             "train_loss": float(np.mean(train_losses)),
+            "train_semantic_loss": float(np.mean(train_semantic_losses)),
+            "train_boundary_loss": float(np.mean(train_boundary_losses)),
             "train_accuracy": train_metrics["accuracy"],
             "train_miou": train_metrics["miou"],
             "train_miou_fg": train_metrics["miou_fg"],
             "train_mf1": train_metrics["mf1"],
             "val_loss": val_metrics["loss"],
+            "val_semantic_loss": val_metrics["semantic_loss"],
+            "val_boundary_loss": val_metrics["boundary_loss"],
             "val_accuracy": val_metrics["accuracy"],
             "val_miou": val_metrics["miou"],
             "val_miou_fg": val_metrics["miou_fg"],
@@ -279,7 +314,9 @@ def train(args: argparse.Namespace) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--module", required=True, choices=("dsconv", "gated_boundary"))
+    parser.add_argument(
+        "--module", required=True, choices=("deeplab", "dsconv", "gated_boundary")
+    )
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--run-name", required=True)
@@ -291,9 +328,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--boundary-weight", type=float, default=0.2)
+    parser.add_argument("--encoder-weights", default="imagenet")
     args = parser.parse_args()
     if args.batch_size <= 0 or args.accum_steps <= 0:
         parser.error("batch-size and accum-steps must be positive")
+    if args.boundary_weight < 0:
+        parser.error("boundary-weight must be non-negative")
     return args
 
 
