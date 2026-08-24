@@ -1,3 +1,10 @@
 from .ltl_net import LTLNet, TPDDecoder
+from .module_models import DSConvResNet50, GatedBoundaryResNet50, build_module_model
 
-__all__ = ["LTLNet", "TPDDecoder"]
+__all__ = [
+    "LTLNet",
+    "TPDDecoder",
+    "DSConvResNet50",
+    "GatedBoundaryResNet50",
+    "build_module_model",
+]
