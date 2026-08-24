@@ -44,8 +44,15 @@ def save_training_history(history, record_path):
     """每轮覆盖写入，训练中断时也能保留已完成 epoch 的记录。"""
     os.makedirs(record_path, exist_ok=True)
     csv_path = os.path.join(record_path, "history.csv")
+    # Keep the stable common columns first, then preserve experiment-specific
+    # metrics (for example per-class IoU) instead of rejecting schema growth.
+    extra_fields = []
+    for row in history:
+        for key in row:
+            if key not in HISTORY_FIELDS and key not in extra_fields:
+                extra_fields.append(key)
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDS + extra_fields)
         writer.writeheader()
         writer.writerows(history)
 

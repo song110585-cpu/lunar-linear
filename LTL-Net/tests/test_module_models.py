@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+import csv
+import tempfile
 
 import torch
 
@@ -12,6 +14,7 @@ for path in (PROJECT_ROOT, PROJECT_ROOT / "scripts"):
 from models.dynamic_snake import DynamicSnakeConv2d
 from models.module_models import DSConvResNet50, GatedBoundaryResNet50
 from train_module_experiment import masks_to_boundaries
+from experiment_artifacts import HISTORY_FIELDS, save_training_history
 
 
 def test_dynamic_snake_keeps_shape_and_trains_offsets():
@@ -45,3 +48,15 @@ def test_boundary_target_marks_foreground_transitions_only():
     target = masks_to_boundaries(labels, (8, 8))
     assert target.shape == (1, 1, 8, 8)
     assert 0 < target.sum() < target.numel()
+
+
+def test_history_writer_preserves_extra_metrics():
+    row = {field: 0.0 for field in HISTORY_FIELDS}
+    row["epoch"] = 1
+    row["val_iou_per_class"] = [0.1, 0.2, 0.3, 0.4, 0.5]
+    with tempfile.TemporaryDirectory() as output_dir:
+        csv_path = save_training_history([row], output_dir)
+        with open(csv_path, newline="", encoding="utf-8-sig") as handle:
+            saved = next(csv.DictReader(handle))
+        assert "val_iou_per_class" in saved
+        assert saved["val_iou_per_class"] == "[0.1, 0.2, 0.3, 0.4, 0.5]"
