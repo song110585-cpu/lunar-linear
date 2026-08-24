@@ -1,0 +1,39 @@
+{
+  "experiment": "v6_overlap40_gated_boundary_resnet50",
+  "module": "gated_boundary",
+  "encoder": "resnet50",
+  "seed": 42,
+  "epochs": 80,
+  "batch_size": 2,
+  "accum_steps": 2,
+  "num_workers": 2,
+  "learning_rate": 0.00005,
+  "boundary_weight": 0.2,
+  "selection_metric": "val_mIoU_fg",
+  "run_name": "v6_overlap40_gated_boundary_resnet50_seed42_formal80_valfg",
+  "data_candidates": [
+    "/kaggle/input/datav6-overlap40/dataset_v6_random811_overlap40",
+    "/kaggle/input/datasets/yuanssy/datav6-overlap40/dataset_v6_random811_overlap40",
+    "/kaggle/input/datasets/changyasong/datav6-overlap40/dataset_v6_random811_overlap40"
+  ],
+  "expected_tiles": {
+    "train": 1598,
+    "val": 200,
+    "test": 200
+  },
+  "expected_mean": [
+    0.15665339073973303,
+    0.6052870962271574,
+    0.22171011101838023,
+    0.5087022443378417,
+    0.46687463729626205
+  ],
+  "expected_std": [
+    0.07239327406001447,
+    0.35159567816693277,
+    0.23999408652260576,
+    0.18305312443820845,
+    0.18653673179588806
+  ],
+  "automatic_test_evaluation": false
+}
