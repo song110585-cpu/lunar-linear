@@ -45,6 +45,8 @@ DATA_METADATA_FILES = (
     "tile_manifest.csv",
 )
 GATED_MODULE_NAMES = {"gated_boundary", "gated_cmcr"}
+FEC_MODULE_NAMES = {"deeplab_fec", "gated_fec"}
+BOUNDARY_MODULE_NAMES = GATED_MODULE_NAMES | {"gated_fec"}
 
 
 def set_seed(seed: int) -> None:
@@ -91,29 +93,58 @@ def masks_to_boundaries(labels: torch.Tensor, output_size: tuple[int, int]) -> t
 
 
 class ExperimentLoss(nn.Module):
-    def __init__(self, module_name: str, boundary_weight: float = 0.2) -> None:
+    def __init__(
+        self,
+        module_name: str,
+        boundary_weight: float = 0.2,
+        foreground_weight: float = 0.1,
+    ) -> None:
         super().__init__()
         self.module_name = module_name
         self.boundary_weight = boundary_weight
+        self.foreground_weight = foreground_weight
         self.register_buffer("class_weights", torch.tensor(CLASS_WEIGHTS, dtype=torch.float32))
         self.semantic = nn.CrossEntropyLoss(weight=self.class_weights)
 
     def forward(
-        self, logits: torch.Tensor, labels: torch.Tensor, boundary_logits: torch.Tensor | None
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        boundary_logits: torch.Tensor | None,
+        foreground_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         semantic_loss = self.semantic(logits, labels)
         boundary_loss = logits.new_zeros(())
-        if self.module_name in GATED_MODULE_NAMES:
+        if self.module_name in BOUNDARY_MODULE_NAMES:
             if boundary_logits is None:
                 raise RuntimeError(f"{self.module_name} model did not return boundary logits")
             targets = masks_to_boundaries(labels, boundary_logits.shape[-2:])
             boundary_loss = F.binary_cross_entropy_with_logits(
                 boundary_logits, targets, pos_weight=logits.new_tensor(4.0)
             )
-        total = semantic_loss + self.boundary_weight * boundary_loss
+        foreground_loss = logits.new_zeros(())
+        if self.module_name in FEC_MODULE_NAMES:
+            if foreground_logits is None:
+                raise RuntimeError(f"{self.module_name} did not return foreground logits")
+            foreground_target = F.interpolate(
+                (labels > 0)[:, None].float(),
+                size=foreground_logits.shape[-2:],
+                mode="nearest",
+            )
+            foreground_loss = F.binary_cross_entropy_with_logits(
+                foreground_logits,
+                foreground_target,
+                pos_weight=logits.new_tensor(4.0),
+            )
+        total = (
+            semantic_loss
+            + self.boundary_weight * boundary_loss
+            + self.foreground_weight * foreground_loss
+        )
         return total, {
             "semantic_loss": float(semantic_loss.detach()),
             "boundary_loss": float(boundary_loss.detach()),
+            "foreground_loss": float(foreground_loss.detach()),
         }
 
 
@@ -122,6 +153,17 @@ def model_outputs(model: nn.Module, images: torch.Tensor, with_aux: bool):
         outputs = model.forward_with_aux(images)
         return outputs["logits"], outputs["boundary_logits"]
     return model(images), None
+
+
+def training_outputs(model: nn.Module, images: torch.Tensor, module_name: str):
+    if module_name in BOUNDARY_MODULE_NAMES | FEC_MODULE_NAMES:
+        outputs = model.forward_with_aux(images)
+        return (
+            outputs["logits"],
+            outputs.get("boundary_logits"),
+            outputs.get("foreground_logits"),
+        )
+    return model(images), None, None
 
 
 def summarize_hist(hist: torch.Tensor) -> dict:
@@ -144,22 +186,29 @@ def evaluate(
     losses: list[float] = []
     semantic_losses: list[float] = []
     boundary_losses: list[float] = []
+    foreground_losses: list[float] = []
     for step, (images, labels, _) in enumerate(tqdm(loader, desc="Validation", unit="batch")):
         if max_steps and step >= max_steps:
             break
         images, labels = images.to(device), labels.to(device)
         with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            logits, boundary_logits = model_outputs(model, images, with_aux)
-            loss, parts = criterion(logits, labels, boundary_logits)
+            logits, boundary_logits, foreground_logits = training_outputs(
+                model, images, criterion.module_name
+            )
+            loss, parts = criterion(
+                logits, labels, boundary_logits, foreground_logits
+            )
         losses.append(float(loss))
         semantic_losses.append(parts["semantic_loss"])
         boundary_losses.append(parts["boundary_loss"])
+        foreground_losses.append(parts["foreground_loss"])
         hist += metrics.multiclass_confusion(logits.argmax(1), labels, 5).double()
     result = summarize_hist(hist)
     result.update(
         loss=float(np.mean(losses)),
         semantic_loss=float(np.mean(semantic_losses)),
         boundary_loss=float(np.mean(boundary_losses)),
+        foreground_loss=float(np.mean(foreground_losses)),
     )
     return result
 
@@ -226,7 +275,9 @@ def train(args: argparse.Namespace) -> dict:
             Path(args.init_checkpoint).read_bytes()
         ).hexdigest()
     with_aux = args.module in GATED_MODULE_NAMES
-    criterion = ExperimentLoss(args.module, args.boundary_weight).to(device)
+    criterion = ExperimentLoss(
+        args.module, args.boundary_weight, args.foreground_weight
+    ).to(device)
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = AdamW(trainable_parameters, lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
@@ -280,6 +331,7 @@ def train(args: argparse.Namespace) -> dict:
         train_losses: list[float] = []
         train_semantic_losses: list[float] = []
         train_boundary_losses: list[float] = []
+        train_foreground_losses: list[float] = []
         for step, (images, labels, _) in enumerate(
             tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}", unit="batch")
         ):
@@ -287,8 +339,12 @@ def train(args: argparse.Namespace) -> dict:
                 break
             images, labels = images.to(device), labels.to(device)
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-                logits, boundary_logits = model_outputs(model, images, with_aux)
-                full_loss, parts = criterion(logits, labels, boundary_logits)
+                logits, boundary_logits, foreground_logits = training_outputs(
+                    model, images, args.module
+                )
+                full_loss, parts = criterion(
+                    logits, labels, boundary_logits, foreground_logits
+                )
                 if not torch.isfinite(full_loss):
                     raise FloatingPointError(
                         f"non-finite training loss at epoch={epoch}, step={step}"
@@ -309,6 +365,7 @@ def train(args: argparse.Namespace) -> dict:
             train_losses.append(float(full_loss.detach()))
             train_semantic_losses.append(parts["semantic_loss"])
             train_boundary_losses.append(parts["boundary_loss"])
+            train_foreground_losses.append(parts["foreground_loss"])
             train_hist += metrics.multiclass_confusion(logits.argmax(1), labels, 5).double()
 
         train_metrics = summarize_hist(train_hist)
@@ -328,6 +385,7 @@ def train(args: argparse.Namespace) -> dict:
             "train_loss": float(np.mean(train_losses)),
             "train_semantic_loss": float(np.mean(train_semantic_losses)),
             "train_boundary_loss": float(np.mean(train_boundary_losses)),
+            "train_foreground_loss": float(np.mean(train_foreground_losses)),
             "train_accuracy": train_metrics["accuracy"],
             "train_miou": train_metrics["miou"],
             "train_miou_fg": train_metrics["miou_fg"],
@@ -335,6 +393,7 @@ def train(args: argparse.Namespace) -> dict:
             "val_loss": val_metrics["loss"],
             "val_semantic_loss": val_metrics["semantic_loss"],
             "val_boundary_loss": val_metrics["boundary_loss"],
+            "val_foreground_loss": val_metrics["foreground_loss"],
             "val_accuracy": val_metrics["accuracy"],
             "val_miou": val_metrics["miou"],
             "val_miou_fg": val_metrics["miou_fg"],
@@ -386,7 +445,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--module",
         required=True,
-        choices=("deeplab", "deeplab_cmcr", "dsconv", "gated_boundary", "gated_cmcr"),
+        choices=(
+            "deeplab",
+            "deeplab_cmcr",
+            "deeplab_fec",
+            "dsconv",
+            "gated_boundary",
+            "gated_cmcr",
+            "gated_fec",
+        ),
     )
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -399,6 +466,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--boundary-weight", type=float, default=0.2)
+    parser.add_argument("--foreground-weight", type=float, default=0.1)
     parser.add_argument("--encoder-weights", default="imagenet")
     parser.add_argument("--init-checkpoint", default="")
     parser.add_argument("--freeze-base", action="store_true")
@@ -408,6 +476,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("batch-size and accum-steps must be positive")
     if args.boundary_weight < 0:
         parser.error("boundary-weight must be non-negative")
+    if args.foreground_weight < 0:
+        parser.error("foreground-weight must be non-negative")
     if args.early_stopping_patience < 0:
         parser.error("early-stopping-patience must be non-negative")
     if args.freeze_base and args.module != "gated_cmcr":

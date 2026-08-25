@@ -16,10 +16,12 @@ for path in (PROJECT_ROOT, PROJECT_ROOT / "scripts"):
 from models.dynamic_snake import DynamicSnakeConv2d
 from models.module_models import (
     DeepLabCMCRResNet50,
+    DeepLabFECResNet50,
     DeepLabResNet50,
     DSConvResNet50,
     GatedBoundaryResNet50,
     GatedCMCRResNet50,
+    GatedFECResNet50,
 )
 from train_module_experiment import (
     DATA_METADATA_FILES,
@@ -131,6 +133,39 @@ def test_frozen_cmcr_loader_restores_parent_and_freezes_everything_else():
             parameter.requires_grad == name.startswith("cmcr.")
             for name, parameter in enhanced.named_parameters()
         )
+
+
+def test_fec_models_start_as_exact_parents_and_receive_auxiliary_gradients():
+    pairs = (
+        (DeepLabResNet50, DeepLabFECResNet50),
+        (GatedBoundaryResNet50, GatedFECResNet50),
+    )
+    inputs = torch.randn(1, 5, 64, 64)
+    labels = torch.randint(0, 5, (1, 64, 64))
+    for parent_type, enhanced_type in pairs:
+        torch.manual_seed(2026)
+        parent = parent_type(encoder_weights=None).eval()
+        torch.manual_seed(2026)
+        enhanced = enhanced_type(encoder_weights=None).eval()
+        with torch.no_grad():
+            assert torch.equal(parent(inputs), enhanced(inputs))
+        outputs = enhanced.forward_with_aux(inputs)
+        criterion = ExperimentLoss(
+            "gated_fec" if parent_type is GatedBoundaryResNet50 else "deeplab_fec",
+            boundary_weight=0.0,
+            foreground_weight=0.1,
+        )
+        loss, parts = criterion(
+            outputs["logits"],
+            labels,
+            outputs.get("boundary_logits"),
+            outputs["foreground_logits"],
+        )
+        loss.backward()
+        assert parts["foreground_loss"] > 0
+        assert torch.isfinite(enhanced.fec.calibration_strength.grad)
+        assert enhanced.fec.evidence_head[-1].weight.grad is not None
+        assert torch.isfinite(enhanced.fec.evidence_head[-1].weight.grad).all()
 
 
 def test_val_diagnostic_experiment_filter_keeps_declared_order():
@@ -292,6 +327,23 @@ def test_frozen_cmcr_config_has_epoch_zero_guard_protocol():
     assert config["boundary_weight"] == 0.0
     assert len(config["expected_init_checkpoint_sha256"]) == 64
     assert config["automatic_test_evaluation"] is False
+
+
+def test_fec_configs_share_the_controlled_batch4_protocol():
+    config_dir = PROJECT_ROOT / "configs"
+    names = (
+        "v6_overlap40_deeplab_fec_batch4_seed42.json",
+        "v6_overlap40_gated_fec_batch4_seed42.json",
+    )
+    configs = [json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names]
+    assert [config["module"] for config in configs] == ["deeplab_fec", "gated_fec"]
+    assert all(config["seed"] == 42 for config in configs)
+    assert all(config["batch_size"] == 4 and config["accum_steps"] == 1 for config in configs)
+    assert all(config["boundary_weight"] == 0.0 for config in configs)
+    assert all(config["foreground_weight"] == 0.1 for config in configs)
+    assert all(config["selection_metric"] == "val_mIoU_fg" for config in configs)
+    assert all(config["automatic_test_evaluation"] is False for config in configs)
+    assert configs[0]["expected_metadata_sha256"] == configs[1]["expected_metadata_sha256"]
 
 
 def test_history_writer_preserves_extra_metrics():

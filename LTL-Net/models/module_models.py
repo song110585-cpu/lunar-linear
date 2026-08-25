@@ -229,6 +229,60 @@ class DeepLabCMCRResNet50(DeepLabResNet50):
         return logits + self.cmcr(x, logits.shape[-2:])
 
 
+class ForegroundEvidenceCalibration(nn.Module):
+    """Binary foreground evidence that softly calibrates multiclass logits."""
+
+    def __init__(
+        self, feature_channels: int = 256, hidden_channels: int = 32
+    ) -> None:
+        super().__init__()
+        self.evidence_head = nn.Sequential(
+            _conv_norm_relu(feature_channels, hidden_channels, 3),
+            nn.Conv2d(hidden_channels, 1, 1, bias=True),
+        )
+        self.calibration_strength = nn.Parameter(torch.zeros(()))
+
+    def forward(
+        self, features: torch.Tensor, logits: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        evidence_logits = self.evidence_head(features)
+        evidence_high = F.interpolate(
+            evidence_logits,
+            size=logits.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+        calibration = 2.0 * torch.tanh(self.calibration_strength) * torch.tanh(
+            evidence_high
+        )
+        calibrated = torch.cat(
+            (logits[:, :1] - calibration, logits[:, 1:] + calibration), dim=1
+        )
+        return calibrated, evidence_logits
+
+
+class DeepLabFECResNet50(_DeepLabResNet50Base):
+    """DeepLabV3+ plus foreground-evidence logit calibration."""
+
+    def __init__(
+        self,
+        encoder_weights: str | None = "imagenet",
+        classes: int = 5,
+        fec_channels: int = 32,
+    ) -> None:
+        super().__init__(encoder_weights=encoder_weights, classes=classes)
+        self.fec = ForegroundEvidenceCalibration(256, fec_channels)
+
+    def forward_with_aux(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        _, decoded = self._features(x)
+        logits = self.segmentation_head(decoded)
+        logits, foreground_logits = self.fec(decoded, logits)
+        return {"logits": logits, "foreground_logits": foreground_logits}
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward_with_aux(x)["logits"]
+
+
 class GatedCMCRResNet50(GatedBoundaryResNet50):
     """Semantic-gated detail fusion plus cross-modal consistency correction."""
 
@@ -256,6 +310,31 @@ class GatedCMCRResNet50(GatedBoundaryResNet50):
         return outputs
 
 
+class GatedFECResNet50(GatedBoundaryResNet50):
+    """Validated semantic-gated fusion plus foreground-evidence calibration."""
+
+    def __init__(
+        self,
+        encoder_weights: str | None = "imagenet",
+        classes: int = 5,
+        shape_channels: int = 32,
+        fec_channels: int = 32,
+    ) -> None:
+        super().__init__(encoder_weights, classes, shape_channels)
+        self.fec = ForegroundEvidenceCalibration(256, fec_channels)
+
+    def forward_with_aux(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        features, decoded = self._features(x)
+        refined, boundary_logits = self.boundary_refinement(features[1], decoded)
+        logits = self.segmentation_head(refined)
+        logits, foreground_logits = self.fec(refined, logits)
+        return {
+            "logits": logits,
+            "boundary_logits": boundary_logits,
+            "foreground_logits": foreground_logits,
+        }
+
+
 def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> nn.Module:
     normalized = name.strip().lower().replace("-", "_")
     if normalized in {"deeplab", "deeplabv3plus", "deeplab_resnet50"}:
@@ -266,6 +345,10 @@ def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> n
         return GatedBoundaryResNet50(encoder_weights=encoder_weights)
     if normalized in {"deeplab_cmcr", "deeplab_cmcr_resnet50"}:
         return DeepLabCMCRResNet50(encoder_weights=encoder_weights)
+    if normalized in {"deeplab_fec", "deeplab_fec_resnet50"}:
+        return DeepLabFECResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_cmcr", "gated_cmcr_resnet50"}:
         return GatedCMCRResNet50(encoder_weights=encoder_weights)
+    if normalized in {"gated_fec", "gated_fec_resnet50"}:
+        return GatedFECResNet50(encoder_weights=encoder_weights)
     raise ValueError(f"unknown module model: {name}")
