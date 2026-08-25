@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--single-output-dir", type=Path, help="单模型诊断输出目录")
     parser.add_argument(
         "--model-type",
-        choices=("deeplab", "dsconv", "gated_boundary"),
+        choices=("deeplab", "dsconv", "gated_boundary", "gated_cmcr"),
         help="通常由 config.json/metrics.json 自动识别",
     )
     parser.add_argument(
@@ -131,6 +131,7 @@ def discover_model_type(model_folder: Path) -> str:
         "deeplabv3plus": "deeplab",
         "dsconv": "dsconv",
         "gated_boundary": "gated_boundary",
+        "gated_cmcr": "gated_cmcr",
     }
     for filename in ("config.json", "metrics.json"):
         path = model_folder / filename
@@ -253,6 +254,9 @@ def flatten_evaluation(name: str, payload: dict) -> dict:
     if "gate_activation" in payload:
         row["gate_mean"] = payload["gate_activation"]["mean"]
         row["gate_std"] = payload["gate_activation"]["std"]
+    if "cmcr_gate_activation" in payload:
+        row["cmcr_gate_mean"] = payload["cmcr_gate_activation"]["mean"]
+        row["cmcr_gate_std"] = payload["cmcr_gate_activation"]["std"]
     return row
 
 

@@ -12,10 +12,20 @@ import segmentation_models_pytorch as smp
 from .dynamic_snake import DynamicLineRefinement
 
 
-def _conv_norm_relu(in_channels: int, out_channels: int, kernel_size: int = 3) -> nn.Sequential:
+def _conv_norm_relu(
+    in_channels: int,
+    out_channels: int,
+    kernel_size: int = 3,
+    stride: int = 1,
+) -> nn.Sequential:
     return nn.Sequential(
         nn.Conv2d(
-            in_channels, out_channels, kernel_size, padding=kernel_size // 2, bias=False
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=kernel_size // 2,
+            bias=False,
         ),
         nn.BatchNorm2d(out_channels),
         nn.ReLU(inplace=True),
@@ -155,6 +165,73 @@ class GatedBoundaryResNet50(_DeepLabResNet50Base):
         return self.forward_with_aux(x)["logits"]
 
 
+class CrossModalConsistencyResidual(nn.Module):
+    """Class-specific correction from WAC and terrain evidence at 1/4 scale."""
+
+    def __init__(self, feature_channels: int = 32, classes: int = 5) -> None:
+        super().__init__()
+        hidden_channels = feature_channels // 2
+        self.appearance_stem = nn.Sequential(
+            _conv_norm_relu(1, hidden_channels, 3, stride=2),
+            _conv_norm_relu(hidden_channels, feature_channels, 3, stride=2),
+        )
+        self.terrain_stem = nn.Sequential(
+            _conv_norm_relu(4, hidden_channels, 3, stride=2),
+            _conv_norm_relu(hidden_channels, feature_channels, 3, stride=2),
+        )
+        self.consistency_gate = nn.Sequential(
+            nn.Conv2d(4 * feature_channels, feature_channels, 1, bias=True),
+            nn.Sigmoid(),
+        )
+        self.fusion = _conv_norm_relu(3 * feature_channels, feature_channels, 3)
+        self.residual_head = nn.Conv2d(feature_channels, classes, 1, bias=True)
+        nn.init.zeros_(self.residual_head.weight)
+        nn.init.zeros_(self.residual_head.bias)
+
+    def forward(self, inputs: torch.Tensor, output_size: tuple[int, int]) -> torch.Tensor:
+        appearance = self.appearance_stem(inputs[:, :1])
+        terrain = self.terrain_stem(inputs[:, 1:])
+        difference = torch.abs(appearance - terrain)
+        interaction = appearance * terrain
+        gate = self.consistency_gate(
+            torch.cat((appearance, terrain, difference, interaction), dim=1)
+        )
+        fused = self.fusion(
+            torch.cat((appearance * gate, terrain * gate, difference), dim=1)
+        )
+        residual = self.residual_head(fused)
+        return F.interpolate(
+            residual, size=output_size, mode="bilinear", align_corners=False
+        )
+
+
+class GatedCMCRResNet50(GatedBoundaryResNet50):
+    """Semantic-gated detail fusion plus cross-modal consistency correction."""
+
+    def __init__(
+        self,
+        encoder_weights: str | None = "imagenet",
+        classes: int = 5,
+        shape_channels: int = 32,
+        cmcr_channels: int = 32,
+    ) -> None:
+        super().__init__(
+            encoder_weights=encoder_weights,
+            classes=classes,
+            shape_channels=shape_channels,
+        )
+        self.cmcr = CrossModalConsistencyResidual(
+            feature_channels=cmcr_channels, classes=classes
+        )
+
+    def forward_with_aux(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        outputs = super().forward_with_aux(x)
+        outputs["logits"] = outputs["logits"] + self.cmcr(
+            x, outputs["logits"].shape[-2:]
+        )
+        return outputs
+
+
 def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> nn.Module:
     normalized = name.strip().lower().replace("-", "_")
     if normalized in {"deeplab", "deeplabv3plus", "deeplab_resnet50"}:
@@ -163,4 +240,6 @@ def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> n
         return DSConvResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_boundary", "gated_boundary_resnet50"}:
         return GatedBoundaryResNet50(encoder_weights=encoder_weights)
+    if normalized in {"gated_cmcr", "gated_cmcr_resnet50"}:
+        return GatedCMCRResNet50(encoder_weights=encoder_weights)
     raise ValueError(f"unknown module model: {name}")

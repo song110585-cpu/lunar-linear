@@ -33,7 +33,8 @@ from train_module_experiment import masks_to_boundaries
 
 
 CLASS_NAMES = ["Background", "WR", "Rille", "Fault", "Graben"]
-MODULE_MODEL_NAMES = {"deeplab", "dsconv", "gated_boundary"}
+MODULE_MODEL_NAMES = {"deeplab", "dsconv", "gated_boundary", "gated_cmcr"}
+GATED_MODEL_NAMES = {"gated_boundary", "gated_cmcr"}
 LABEL_CMAP = ListedColormap(["#111111", "#f4d03f", "#2e86de", "#e74c3c", "#af7ac5"])
 ERROR_CMAP = ListedColormap(["#111111", "#e74c3c", "#3498db", "#f1c40f"])
 
@@ -232,7 +233,7 @@ def summarize_boundary_counts(counts):
 
 def forward_outputs(model, images, model_name):
     normalized = model_name.lower().replace("-", "_")
-    if normalized == "gated_boundary":
+    if normalized in GATED_MODEL_NAMES:
         outputs = model.forward_with_aux(images)
         return outputs["logits"], outputs["boundary_logits"]
     return model(images), None
@@ -326,17 +327,25 @@ def main():
     auxiliary_boundary_hist = np.zeros((2, 2), dtype=np.int64)
     auxiliary_boundary_pixels = 0
     gate_stats = {"sum": 0.0, "sum_sq": 0.0, "count": 0, "low": 0, "high": 0}
-    hook_handle = None
-    if args.model.lower().replace("-", "_") == "gated_boundary":
+    cmcr_gate_stats = {"sum": 0.0, "sum_sq": 0.0, "count": 0, "low": 0, "high": 0}
+    hook_handles = []
+
+    def register_gate_hook(module, stats):
         def capture_gate(_module, _inputs, output):
             values = output.detach().float()
-            gate_stats["sum"] += float(values.sum())
-            gate_stats["sum_sq"] += float((values * values).sum())
-            gate_stats["count"] += values.numel()
-            gate_stats["low"] += int((values < 0.05).sum())
-            gate_stats["high"] += int((values > 0.95).sum())
+            stats["sum"] += float(values.sum())
+            stats["sum_sq"] += float((values * values).sum())
+            stats["count"] += values.numel()
+            stats["low"] += int((values < 0.05).sum())
+            stats["high"] += int((values > 0.95).sum())
 
-        hook_handle = model.boundary_refinement.gate.register_forward_hook(capture_gate)
+        hook_handles.append(module.register_forward_hook(capture_gate))
+
+    normalized_model = args.model.lower().replace("-", "_")
+    if normalized_model in GATED_MODEL_NAMES:
+        register_gate_hook(model.boundary_refinement.gate, gate_stats)
+    if normalized_model == "gated_cmcr":
+        register_gate_hook(model.cmcr.consistency_gate, cmcr_gate_stats)
     losses = []
     rows = []
     model.eval()
@@ -388,7 +397,7 @@ def main():
                     ),
                 })
 
-    if hook_handle is not None:
+    for hook_handle in hook_handles:
         hook_handle.remove()
 
     result = metrics.metrics_from_hist(torch.from_numpy(total_hist))
@@ -430,6 +439,18 @@ def main():
             "std": variance ** 0.5,
             "fraction_below_0_05": gate_stats["low"] / gate_stats["count"],
             "fraction_above_0_95": gate_stats["high"] / gate_stats["count"],
+        }
+    if cmcr_gate_stats["count"]:
+        mean = cmcr_gate_stats["sum"] / cmcr_gate_stats["count"]
+        variance = max(
+            cmcr_gate_stats["sum_sq"] / cmcr_gate_stats["count"] - mean * mean,
+            0.0,
+        )
+        payload["cmcr_gate_activation"] = {
+            "mean": mean,
+            "std": variance ** 0.5,
+            "fraction_below_0_05": cmcr_gate_stats["low"] / cmcr_gate_stats["count"],
+            "fraction_above_0_95": cmcr_gate_stats["high"] / cmcr_gate_stats["count"],
         }
     (output_dir / "evaluation_metrics.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"

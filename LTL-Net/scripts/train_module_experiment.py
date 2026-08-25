@@ -44,6 +44,7 @@ DATA_METADATA_FILES = (
     "normalization_stats.json",
     "tile_manifest.csv",
 )
+GATED_MODULE_NAMES = {"gated_boundary", "gated_cmcr"}
 
 
 def set_seed(seed: int) -> None:
@@ -102,9 +103,9 @@ class ExperimentLoss(nn.Module):
     ) -> tuple[torch.Tensor, dict[str, float]]:
         semantic_loss = self.semantic(logits, labels)
         boundary_loss = logits.new_zeros(())
-        if self.module_name == "gated_boundary":
+        if self.module_name in GATED_MODULE_NAMES:
             if boundary_logits is None:
-                raise RuntimeError("gated_boundary model did not return boundary logits")
+                raise RuntimeError(f"{self.module_name} model did not return boundary logits")
             targets = masks_to_boundaries(labels, boundary_logits.shape[-2:])
             boundary_loss = F.binary_cross_entropy_with_logits(
                 boundary_logits, targets, pos_weight=logits.new_tensor(4.0)
@@ -194,7 +195,7 @@ def train(args: argparse.Namespace) -> dict:
 
     encoder_weights = None if args.encoder_weights.lower() == "none" else args.encoder_weights
     model = build_module_model(args.module, encoder_weights=encoder_weights).to(device)
-    with_aux = args.module == "gated_boundary"
+    with_aux = args.module in GATED_MODULE_NAMES
     criterion = ExperimentLoss(args.module, args.boundary_weight).to(device)
     optimizer = AdamW(model.parameters(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
@@ -315,7 +316,9 @@ def train(args: argparse.Namespace) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--module", required=True, choices=("deeplab", "dsconv", "gated_boundary")
+        "--module",
+        required=True,
+        choices=("deeplab", "dsconv", "gated_boundary", "gated_cmcr"),
     )
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)

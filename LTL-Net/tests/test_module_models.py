@@ -14,7 +14,12 @@ for path in (PROJECT_ROOT, PROJECT_ROOT / "scripts"):
         sys.path.insert(0, str(path))
 
 from models.dynamic_snake import DynamicSnakeConv2d
-from models.module_models import DeepLabResNet50, DSConvResNet50, GatedBoundaryResNet50
+from models.module_models import (
+    DeepLabResNet50,
+    DSConvResNet50,
+    GatedBoundaryResNet50,
+    GatedCMCRResNet50,
+)
 from train_module_experiment import (
     DATA_METADATA_FILES,
     ExperimentLoss,
@@ -66,6 +71,28 @@ def test_gated_boundary_output_contract():
         output = model.forward_with_aux(torch.randn(1, 5, 64, 64))
     assert output["logits"].shape == (1, 5, 64, 64)
     assert output["boundary_logits"].shape == (1, 1, 32, 32)
+
+
+def test_gated_cmcr_starts_as_exact_gated_model_and_trains_residual_head():
+    torch.manual_seed(2026)
+    base = GatedBoundaryResNet50(encoder_weights=None).eval()
+    torch.manual_seed(2026)
+    enhanced = GatedCMCRResNet50(encoder_weights=None).eval()
+    inputs = torch.randn(1, 5, 64, 64)
+    with torch.no_grad():
+        base_outputs = base.forward_with_aux(inputs)
+        enhanced_outputs = enhanced.forward_with_aux(inputs)
+    assert torch.equal(base_outputs["logits"], enhanced_outputs["logits"])
+    assert torch.equal(
+        base_outputs["boundary_logits"], enhanced_outputs["boundary_logits"]
+    )
+    assert torch.count_nonzero(enhanced.cmcr.residual_head.weight) == 0
+    loss = enhanced(inputs)[..., 8:56, 8:56].mean()
+    loss.backward()
+    gradient = enhanced.cmcr.residual_head.weight.grad
+    assert gradient is not None
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient) > 0
 
 
 def test_val_diagnostic_experiment_filter_keeps_declared_order():
@@ -191,6 +218,22 @@ def test_control_configs_are_val_only_and_single_variable():
     assert all(config["automatic_test_evaluation"] is False for config in configs)
     assert all(config["selection_metric"] == "val_mIoU_fg" for config in configs)
     assert all(config["batch_size"] == 2 and config["accum_steps"] == 2 for config in configs)
+    assert all(config["boundary_weight"] == 0.0 for config in configs)
+    assert configs[0]["expected_metadata_sha256"] == configs[1]["expected_metadata_sha256"]
+
+
+def test_cmcr_and_gated_replication_configs_share_batch4_protocol():
+    config_dir = PROJECT_ROOT / "configs"
+    names = (
+        "v6_overlap40_gated_cmcr_batch4_seed42.json",
+        "v6_overlap40_gated_no_boundary_batch4_seed1337.json",
+    )
+    configs = [json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names]
+    assert [config["module"] for config in configs] == ["gated_cmcr", "gated_boundary"]
+    assert [config["seed"] for config in configs] == [42, 1337]
+    assert all(config["automatic_test_evaluation"] is False for config in configs)
+    assert all(config["selection_metric"] == "val_mIoU_fg" for config in configs)
+    assert all(config["batch_size"] == 4 and config["accum_steps"] == 1 for config in configs)
     assert all(config["boundary_weight"] == 0.0 for config in configs)
     assert configs[0]["expected_metadata_sha256"] == configs[1]["expected_metadata_sha256"]
 
