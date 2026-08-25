@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATA_DIR = Path(r"E:\CHANGE_ME\dataset_v6_random811_overlap40")
+DEFAULT_DATA_DIR = Path(r"E:\月球_dataset\dataset\dataset_v6_random811_overlap40")
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT / "results" / "v6_overlap40"
 DEFAULT_OUTPUT_ROOT = DEFAULT_RESULTS_ROOT / "val_diagnostics"
 CLASS_NAMES = ("background", "wr", "rille", "fault", "graben")
@@ -67,6 +67,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument("--skip-qualitative", action="store_true")
     parser.add_argument(
+        "--skip-data-check",
+        action="store_true",
+        help="跳过推理前的 Val TIFF 完整读取检查（不推荐）",
+    )
+    parser.add_argument(
         "--rerun",
         action="store_true",
         help="即使 evaluation_metrics.json 已存在也重新运行",
@@ -92,6 +97,27 @@ def validate_data_dir(data_dir: Path) -> Path:
             + "\n".join(missing)
         )
     return data_dir
+
+
+def check_tiff_integrity(data_dir: Path, split: str = "val") -> list[tuple[Path, str]]:
+    """Read every TIFF once and return all unreadable files with error messages."""
+    import rasterio
+
+    files: list[Path] = []
+    for kind in ("image", "mask"):
+        directory = data_dir / split / kind
+        files.extend(sorted((*directory.glob("*.tif"), *directory.glob("*.tiff"))))
+    failures: list[tuple[Path, str]] = []
+    print(f"检查 {split} TIFF 完整性，共 {len(files)} 个文件...", flush=True)
+    for index, path in enumerate(files, start=1):
+        try:
+            with rasterio.open(path) as source:
+                source.read()
+        except Exception as error:  # rasterio wraps several GDAL exception types
+            failures.append((path, f"{type(error).__name__}: {error}"))
+        if index % 50 == 0 or index == len(files):
+            print(f"  已检查 {index}/{len(files)}", flush=True)
+    return failures
 
 
 def build_command(
@@ -194,6 +220,15 @@ def main() -> int:
         return 0
 
     data_dir = validate_data_dir(args.data_dir)
+    if not args.skip_data_check:
+        corrupt_files = check_tiff_integrity(data_dir)
+        if corrupt_files:
+            details = "\n".join(f"{path}\n  {error}" for path, error in corrupt_files)
+            raise RuntimeError(
+                f"发现 {len(corrupt_files)} 个无法完整读取的 Val TIFF；请从原始数据副本替换后再运行：\n"
+                + details
+            )
+        print("Val TIFF 完整性检查通过")
     missing_checkpoints = [
         results_root / experiment.checkpoint
         for experiment in experiments

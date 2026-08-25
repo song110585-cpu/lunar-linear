@@ -27,7 +27,7 @@ from evaluate_segmentation import (
     update_boundary_counts,
 )
 from experiment_artifacts import HISTORY_FIELDS, save_training_history
-from run_val_diagnostics import flatten_evaluation, selected_experiments
+from run_val_diagnostics import check_tiff_integrity, flatten_evaluation, selected_experiments
 
 
 def test_dynamic_snake_keeps_shape_and_trains_offsets():
@@ -94,6 +94,18 @@ def test_flatten_evaluation_preserves_comparison_fields():
     assert row["iou_fault"] == 0.7
     assert row["foreground_fp"] == 2
     assert row["boundary_f1_t2"] == 0.746
+
+
+def test_tiff_integrity_check_reports_corrupt_file():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        for kind in ("image", "mask"):
+            (root / "val" / kind).mkdir(parents=True)
+        corrupt = root / "val" / "image" / "broken.tif"
+        corrupt.write_bytes(b"not a tiff")
+        failures = check_tiff_integrity(root)
+    assert len(failures) == 1
+    assert failures[0][0] == corrupt
 
 
 def test_boundary_target_marks_foreground_transitions_only():
