@@ -27,6 +27,7 @@ from evaluate_segmentation import (
     update_boundary_counts,
 )
 from experiment_artifacts import HISTORY_FIELDS, save_training_history
+from run_val_diagnostics import flatten_evaluation, selected_experiments
 
 
 def test_dynamic_snake_keeps_shape_and_trains_offsets():
@@ -59,6 +60,40 @@ def test_gated_boundary_output_contract():
         output = model.forward_with_aux(torch.randn(1, 5, 64, 64))
     assert output["logits"].shape == (1, 5, 64, 64)
     assert output["boundary_logits"].shape == (1, 1, 32, 32)
+
+
+def test_val_diagnostic_experiment_filter_keeps_declared_order():
+    selected = selected_experiments(["gated_without_boundary_loss", "dsconv"])
+    assert [experiment.name for experiment in selected] == [
+        "dsconv",
+        "gated_without_boundary_loss",
+    ]
+
+
+def test_flatten_evaluation_preserves_comparison_fields():
+    payload = {
+        "model": "deeplab",
+        "metrics": {
+            "miou": 0.7,
+            "miou_fg": 0.6,
+            "accuracy": 0.9,
+            "loss": 0.2,
+            "iou_per_class": [0.9, 0.5, 0.6, 0.7, 0.6],
+            "precision_per_class": [0.9] * 5,
+            "recall_per_class": [0.8] * 5,
+            "f1_per_class": [0.85] * 5,
+        },
+        "foreground_binary_confusion": [[10, 2], [3, 8]],
+        "foreground_boundary_metrics": {
+            "2": {"precision": 0.7, "recall": 0.8, "f1": 0.746},
+        },
+    }
+    row = flatten_evaluation("control", payload)
+    assert row["experiment"] == "control"
+    assert row["miou_fg"] == 0.6
+    assert row["iou_fault"] == 0.7
+    assert row["foreground_fp"] == 2
+    assert row["boundary_f1_t2"] == 0.746
 
 
 def test_boundary_target_marks_foreground_transitions_only():
