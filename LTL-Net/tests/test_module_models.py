@@ -27,7 +27,13 @@ from evaluate_segmentation import (
     update_boundary_counts,
 )
 from experiment_artifacts import HISTORY_FIELDS, save_training_history
-from run_val_diagnostics import check_tiff_integrity, flatten_evaluation, selected_experiments
+from run_val_diagnostics import (
+    check_tiff_integrity,
+    discover_checkpoint,
+    discover_model_type,
+    flatten_evaluation,
+    selected_experiments,
+)
 
 
 def test_dynamic_snake_keeps_shape_and_trains_offsets():
@@ -106,6 +112,18 @@ def test_tiff_integrity_check_reports_corrupt_file():
         failures = check_tiff_integrity(root)
     assert len(failures) == 1
     assert failures[0][0] == corrupt
+
+
+def test_single_model_folder_discovers_checkpoint_and_model_type():
+    with tempfile.TemporaryDirectory() as directory:
+        folder = Path(directory)
+        checkpoint = folder / "best_model.pth"
+        checkpoint.write_bytes(b"checkpoint placeholder")
+        (folder / "config.json").write_text(
+            json.dumps({"module": "gated_boundary"}), encoding="utf-8"
+        )
+        assert discover_checkpoint(folder) == checkpoint
+        assert discover_model_type(folder) == "gated_boundary"
 
 
 def test_boundary_target_marks_foreground_transitions_only():

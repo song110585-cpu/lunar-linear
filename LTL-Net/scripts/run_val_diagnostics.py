@@ -1,8 +1,7 @@
-"""Batch-run reproducible validation diagnostics for overlap40 checkpoints.
+"""Run overlap40 validation diagnostics in interactive single-model or batch mode.
 
-Edit ``DEFAULT_DATA_DIR`` below, or pass ``--data-dir`` on the command line.
-The script delegates model evaluation to ``evaluate_segmentation.py`` and then
-creates one comparison CSV/JSON across all successful experiments.
+Running this file without arguments prompts for a model result folder and an
+output folder. Use ``--all`` for the registered multi-model comparison.
 """
 from __future__ import annotations
 
@@ -61,11 +60,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--all", action="store_true", help="运行注册表中的全部模型")
+    parser.add_argument("--model-folder", type=Path, help="单模型结果目录，需包含 best_model.pth")
+    parser.add_argument("--single-output-dir", type=Path, help="单模型诊断输出目录")
+    parser.add_argument(
+        "--model-type",
+        choices=("deeplab", "dsconv", "gated_boundary"),
+        help="通常由 config.json/metrics.json 自动识别",
+    )
     parser.add_argument(
         "--only",
         nargs="*",
         choices=[experiment.name for experiment in EXPERIMENTS],
-        help="只运行指定实验；默认运行全部四个",
+        help="批量模式只运行指定实验",
     )
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -95,6 +102,46 @@ def selected_experiments(names: list[str] | None) -> list[Experiment]:
         return list(EXPERIMENTS)
     selected = set(names)
     return [experiment for experiment in EXPERIMENTS if experiment.name in selected]
+
+
+def clean_input_path(value: str) -> Path:
+    return Path(value.strip().strip('"').strip("'"))
+
+
+def discover_checkpoint(model_folder: Path) -> Path:
+    preferred = model_folder / "best_model.pth"
+    if preferred.is_file():
+        return preferred
+    candidates = sorted(model_folder.glob("*.pth"))
+    if len(candidates) == 1:
+        return candidates[0]
+    raise FileNotFoundError(
+        f"{model_folder} 中未找到 best_model.pth，且无法从 {len(candidates)} 个 .pth 文件唯一确定 checkpoint"
+    )
+
+
+def discover_model_type(model_folder: Path) -> str:
+    aliases = {
+        "deeplab": "deeplab",
+        "deeplabv3plus": "deeplab",
+        "dsconv": "dsconv",
+        "gated_boundary": "gated_boundary",
+    }
+    for filename in ("config.json", "metrics.json"):
+        path = model_folder / filename
+        if not path.is_file():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = payload.get("module") or payload.get("model")
+        if raw is None:
+            continue
+        normalized = str(raw).lower().replace("-", "").replace("_", "")
+        for alias, model_type in aliases.items():
+            if normalized == alias.replace("_", ""):
+                return model_type
+    raise ValueError(
+        f"无法从 {model_folder} 的 config.json/metrics.json 识别模型；请传入 --model-type"
+    )
 
 
 def validate_data_dir(data_dir: Path) -> Path:
@@ -220,27 +267,77 @@ def write_summary(rows: list[dict], output_root: Path) -> None:
         writer.writerows(rows)
 
 
+def preflight_data(args: argparse.Namespace, data_dir: Path) -> None:
+    if args.skip_data_check:
+        return
+    corrupt_files = check_tiff_integrity(data_dir)
+    if corrupt_files:
+        details = "\n".join(f"{path}\n  {error}" for path, error in corrupt_files)
+        raise RuntimeError(
+            f"发现 {len(corrupt_files)} 个无法完整读取的 Val TIFF；请从原始数据副本替换后再运行：\n"
+            + details
+        )
+    print("Val TIFF 完整性检查通过")
+
+
+def run_single(args: argparse.Namespace) -> int:
+    default_data = str(args.data_dir)
+    data_text = input(f"数据集根目录 [{default_data}]: ").strip()
+    data_dir = validate_data_dir(clean_input_path(data_text) if data_text else args.data_dir)
+
+    if args.model_folder is None:
+        folder_text = input("模型结果文件夹（包含 best_model.pth）: ").strip()
+        if not folder_text:
+            raise ValueError("必须输入模型结果文件夹")
+        model_folder = clean_input_path(folder_text).expanduser().resolve()
+    else:
+        model_folder = args.model_folder.expanduser().resolve()
+    if not model_folder.is_dir():
+        raise FileNotFoundError(model_folder)
+
+    checkpoint = discover_checkpoint(model_folder)
+    model_type = args.model_type or discover_model_type(model_folder)
+    default_output = model_folder / "val_diagnostics"
+    if args.single_output_dir is None:
+        output_text = input(f"输出目录 [{default_output}]: ").strip()
+        output_dir = clean_input_path(output_text).expanduser().resolve() if output_text else default_output
+    else:
+        output_dir = args.single_output_dir.expanduser().resolve()
+
+    preflight_data(args, data_dir)
+    metrics_file = output_dir / "evaluation_metrics.json"
+    if metrics_file.is_file() and not args.rerun:
+        print(f"结果已存在，直接复用: {metrics_file}")
+        print("需要重新计算时增加 --rerun")
+        return 0
+
+    experiment = Experiment(model_folder.name, model_type, checkpoint)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = build_command(experiment, checkpoint, data_dir, output_dir, args, None)
+    print(f"\n模型类型: {model_type}")
+    print(f"Checkpoint: {checkpoint}")
+    print(f"输出目录: {output_dir}")
+    print(subprocess.list2cmdline(command), flush=True)
+    completed = subprocess.run(command, cwd=PROJECT_ROOT, check=False)
+    return completed.returncode
+
+
 def main() -> int:
     args = parse_args()
-    experiments = selected_experiments(args.only)
     results_root = args.results_root.expanduser().resolve()
-    output_root = args.output_root.expanduser().resolve()
 
     if args.list:
-        for experiment in experiments:
+        for experiment in selected_experiments(args.only):
             print(f"{experiment.name}: {results_root / experiment.checkpoint}")
         return 0
 
+    if not args.all and args.only is None:
+        return run_single(args)
+
+    experiments = selected_experiments(args.only)
+    output_root = args.output_root.expanduser().resolve()
     data_dir = validate_data_dir(args.data_dir)
-    if not args.skip_data_check:
-        corrupt_files = check_tiff_integrity(data_dir)
-        if corrupt_files:
-            details = "\n".join(f"{path}\n  {error}" for path, error in corrupt_files)
-            raise RuntimeError(
-                f"发现 {len(corrupt_files)} 个无法完整读取的 Val TIFF；请从原始数据副本替换后再运行：\n"
-                + details
-            )
-        print("Val TIFF 完整性检查通过")
+    preflight_data(args, data_dir)
     missing_checkpoints = [
         results_root / experiment.checkpoint
         for experiment in experiments
