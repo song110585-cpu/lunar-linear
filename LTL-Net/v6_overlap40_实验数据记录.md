@@ -272,6 +272,39 @@ Gated batch4 最佳 Val 逐类结果：
 
 Gated batch4 在 epoch 78 达峰值，最终 epoch 为 0.714034，回落 0.45 pp；后20轮 Val `mIoU_fg` 标准差约 0.00167、极差约 0.00545。最佳 epoch 的 Train−Val gap 为 9.26 pp，仍有过拟合，但稳定性明显优于旧 batch2 Gated。当前最弱类仍是 Fault（IoU 0.595611），模块2方向必须结合统一 Val 混淆矩阵进一步确定。
 
+### 4.6 CMCR 独立消融与 Gated+CMCR 组合（2026-08-25）
+
+两项实验均使用 overlap40、ResNet50、seed42、80 epochs、physical batch4/accum1、学习率 5e-5、`val_mIoU_fg` 选模，不自动评估 Test。两份结果均已下载并核验 `config.json`、`metrics.json`、80轮 `history.csv/json`、曲线及 `best_model.pth`；Git commit 均为 `2389489`。CMCR 以零初始化的5类残差 logit 接入，对应模型初始输出严格等于母模型。
+
+| 实验 | 唯一结构变量 | 最佳 epoch | Val mIoU_all | Val mIoU_fg | 相对旧 DeepLab batch4 | 相对 Gated batch4 |
+|---|---|---:|---:|---:|---:|---:|
+| DeepLab+CMCR（B） | DeepLab 增加 CMCR | 78 | 0.765646 | 0.709767 | +0.006441（+0.64 pp） | -0.008815（-0.88 pp） |
+| Gated+CMCR（A+B） | Gated 增加 CMCR | 74 | 0.764456 | 0.708320 | +0.004994（+0.50 pp） | -0.010262（-1.03 pp） |
+
+逐类最佳 Val IoU：
+
+| 模型 | WR | Rille | Fault | Graben |
+|---|---:|---:|---:|---:|
+| Gated（A） | 0.763688 | 0.758272 | 0.595609 | 0.756727 |
+| CMCR（B） | 0.766884 | 0.749997 | 0.573634 | 0.748465 |
+| Gated+CMCR（A+B） | 0.748177 | 0.759213 | 0.582196 | 0.743673 |
+
+A+B 相对 A 的变化为 WR -1.55 pp、Rille +0.09 pp、Fault -1.34 pp、Graben -1.31 pp。只有 Rille 基本持平，其余三类均退化，因此不能把组合结果解释为某一弱类换取整体性能。
+
+统一 FP32 Val 诊断复现了保存指标（B 0.709745，A+B 0.708315，A 0.718574；差异仅为浮点/累计精度）。前景/背景二元混淆统计：
+
+| 模型 | Background→Foreground FP | Foreground→Background FN | 容差2 px边界 F1 |
+|---|---:|---:|---:|
+| Gated（A） | 320,316 | 212,183 | 0.728015 |
+| CMCR（B） | 356,423 | 196,140 | 0.704784 |
+| Gated+CMCR（A+B） | 339,562 | 221,421 | 0.707684 |
+
+CMCR 单独相对 A 表现为更高召回、更多背景假阳性；组合相对 CMCR 虽减少16,861个 FP，却增加25,281个 FN。更关键的是，组合相对 A 同时增加19,246个 FP和9,238个 FN，且容差2 px边界 F1下降2.03 pp，说明联合训练没有保留任一分支的互补优势。Gated gate 均值从 A 的0.47235变为组合的0.47166，CMCR gate 均值从 B 的0.51394变为组合的0.51786，极端激活比例均很低；没有发现简单的 gate 饱和或分支完全关闭。
+
+训练曲线方面，A/B/A+B 最佳 epoch 的 Train−Val `mIoU_fg` gap 分别为9.26/9.07/9.33 pp，均存在相近程度的过拟合。后20轮 Val `mIoU_fg` 标准差分别为0.00167/0.00153/0.00236，A+B 波动最大；最终相对各自峰值分别回落0.45/0.33/0.51 pp。组合退化不能只归因于一般过拟合，因为其误差结构和边界指标也系统性差于 A。
+
+结论：CMCR 登记为**单种子、小幅正收益候选模块2**，但与 Gated 联合从头训练存在负交互。当前总体架构保留 Gated（A），淘汰现有 A+B 组合；CMCR 可作为独立消融证据，不能宣称其提高了最终 Gated 模型。若继续验证 CMCR，只允许做“冻结已训练 A、仅训练零初始化 CMCR 残差”的两阶段控制，不能重复无约束联合训练。
+
 ## 5. 当前可支持的模型结论
 
 1. 统一选模重跑的 DeepLabV3+-ResNet50 是当前主基线：Test `mIoU_fg=0.6942`（证据 B，待补下载产物）。
@@ -280,6 +313,8 @@ Gated batch4 在 epoch 78 达峰值，最终 epoch 为 0.714034，回落 0.45 pp
 4. D-LinkNet-R50 adapted 的 Test `mIoU_fg=0.6030`，比统一 DeepLab 低 9.12 pp；由于其约 1.80 亿参数、物理 batch=2 且是 R50 适配版，只能说明当前适配和配置较差，不能推断原始 D-LinkNet 方法普遍较差。
 5. DSConv 与旧 Gated Boundary 的 batch2 配置不进入总体架构；同物理 batch2 控制证明二者的旧结果受到严重 batch/BN 混杂，不能作为模块思想无效的证据。
 6. Gated 无边界辅助损失在 physical batch4、seed42 上取得 Val `mIoU_fg=0.718582`，相对同为 batch4 的旧 DeepLab 峰值提升 1.53 pp，登记为单种子有效候选模块1；尚未完成多种子和最终冻结 Test，不能称为稳定增益。
+7. CMCR 单独取得 Val `mIoU_fg=0.709767`，相对旧 DeepLab batch4 提升0.64 pp，登记为单种子、小幅正收益候选模块2。
+8. Gated+CMCR 仅为0.708320，较 Gated 下降1.03 pp，并同时增加前景 FP 与 FN；现有联合结构淘汰，当前最佳总体模型仍是 Gated。
 
 ## 6. 证据路径与缺失项
 
@@ -292,6 +327,9 @@ Gated batch4 在 epoch 78 达峰值，最终 epoch 为 0.714034，回落 0.45 pp
 - DeepLab batch2 控制：`results/v6_overlap40/deeplab_resnet50_batch2_control/`
 - Gated 无边界损失 batch2：`results/v6_overlap40/gated_boundary_resnet50_no_boundary/`
 - Gated 无边界损失 batch4：`results/v6_overlap40/gated_boundary_resnet50_bw0_batch4/`
+- CMCR 单独：`results/v6_overlap40/CMCR/`
+- Gated+CMCR：`results/v6_overlap40/gate+CMCR/`
+- 统一 Val 诊断（含混淆矩阵、边界指标和错误图）：`results/v6_overlap40/val_diagnostics/{gated_without_boundary_loss_batch4,CMCR,gate+CMCR}/`
 - 数据协议审计：`results/data_audit_v6_random_overlap40/`
 
 ### 6.2 仅有旧文档记录、待补原始产物
