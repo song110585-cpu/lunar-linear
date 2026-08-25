@@ -189,20 +189,25 @@ class CrossModalConsistencyResidual(nn.Module):
         nn.init.zeros_(self.residual_head.bias)
 
     def forward(self, inputs: torch.Tensor, output_size: tuple[int, int]) -> torch.Tensor:
-        appearance = self.appearance_stem(inputs[:, :1])
-        terrain = self.terrain_stem(inputs[:, 1:])
-        difference = torch.abs(appearance - terrain)
-        interaction = appearance * terrain
-        gate = self.consistency_gate(
-            torch.cat((appearance, terrain, difference, interaction), dim=1)
-        )
-        fused = self.fusion(
-            torch.cat((appearance * gate, terrain * gate, difference), dim=1)
-        )
-        residual = self.residual_head(fused)
-        return F.interpolate(
-            residual, size=output_size, mode="bilinear", align_corners=False
-        )
+        # Raw lunar raster values can make the multiplicative evidence term
+        # overflow in float16 before normalization. Keep this tiny branch in
+        # FP32 even when the parent model uses AMP.
+        with torch.autocast(device_type=inputs.device.type, enabled=False):
+            inputs = inputs.float()
+            appearance = self.appearance_stem(inputs[:, :1])
+            terrain = self.terrain_stem(inputs[:, 1:])
+            difference = torch.abs(appearance - terrain)
+            interaction = appearance * terrain
+            gate = self.consistency_gate(
+                torch.cat((appearance, terrain, difference, interaction), dim=1)
+            )
+            fused = self.fusion(
+                torch.cat((appearance * gate, terrain * gate, difference), dim=1)
+            )
+            residual = self.residual_head(fused)
+            return F.interpolate(
+                residual, size=output_size, mode="bilinear", align_corners=False
+            )
 
 
 class DeepLabCMCRResNet50(DeepLabResNet50):

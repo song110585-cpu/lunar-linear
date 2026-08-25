@@ -164,6 +164,29 @@ def evaluate(
     return result
 
 
+def load_frozen_cmcr_base(
+    model: nn.Module, checkpoint_path: str, device: torch.device
+) -> dict[str, list[str]]:
+    """Load a trained Gated parent and leave only the zero-init CMCR trainable."""
+    try:
+        state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    except TypeError:  # PyTorch < 2.0
+        state = torch.load(checkpoint_path, map_location=device)
+    incompatible = model.load_state_dict(state, strict=False)
+    missing = list(incompatible.missing_keys)
+    unexpected = list(incompatible.unexpected_keys)
+    if unexpected or any(not key.startswith("cmcr.") for key in missing):
+        raise RuntimeError(
+            "base checkpoint is not a compatible Gated model: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    if not missing:
+        raise RuntimeError("expected a Gated checkpoint without CMCR parameters")
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad_(name.startswith("cmcr."))
+    return {"missing_keys": missing, "unexpected_keys": unexpected}
+
+
 def train(args: argparse.Namespace) -> dict:
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -195,9 +218,17 @@ def train(args: argparse.Namespace) -> dict:
 
     encoder_weights = None if args.encoder_weights.lower() == "none" else args.encoder_weights
     model = build_module_model(args.module, encoder_weights=encoder_weights).to(device)
+    load_report = None
+    init_checkpoint_sha256 = None
+    if args.freeze_base:
+        load_report = load_frozen_cmcr_base(model, args.init_checkpoint, device)
+        init_checkpoint_sha256 = hashlib.sha256(
+            Path(args.init_checkpoint).read_bytes()
+        ).hexdigest()
     with_aux = args.module in GATED_MODULE_NAMES
     criterion = ExperimentLoss(args.module, args.boundary_weight).to(device)
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    optimizer = AdamW(trainable_parameters, lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     checkpoint = output_dir / "best_model.pth"
@@ -211,6 +242,9 @@ def train(args: argparse.Namespace) -> dict:
         output_dir=str(output_dir),
         device=str(device),
         parameter_count=sum(p.numel() for p in model.parameters()),
+        trainable_parameter_count=sum(p.numel() for p in trainable_parameters),
+        init_checkpoint_sha256=init_checkpoint_sha256,
+        checkpoint_load_report=load_report,
         class_weights=CLASS_WEIGHTS,
         selection_metric="val_mIoU_fg",
         automatic_test_evaluation=False,
@@ -221,8 +255,26 @@ def train(args: argparse.Namespace) -> dict:
     )
     print(json.dumps(config, ensure_ascii=False, indent=2))
 
+    epochs_without_improvement = 0
+    if args.freeze_base:
+        baseline_validation = evaluate(
+            model, val_loader, criterion, device, with_aux, args.max_steps
+        )
+        best = {"epoch": 0, **baseline_validation}
+        torch.save(model.state_dict(), checkpoint)
+        print(
+            json.dumps(
+                {"frozen_base_epoch_zero": baseline_validation},
+                ensure_ascii=False,
+            )
+        )
+
     for epoch in range(1, args.epochs + 1):
-        model.train()
+        if args.freeze_base:
+            model.eval()
+            model.cmcr.train()
+        else:
+            model.train()
         optimizer.zero_grad(set_to_none=True)
         train_hist = torch.zeros(5, 5, dtype=torch.float64)
         train_losses: list[float] = []
@@ -237,6 +289,10 @@ def train(args: argparse.Namespace) -> dict:
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 logits, boundary_logits = model_outputs(model, images, with_aux)
                 full_loss, parts = criterion(logits, labels, boundary_logits)
+                if not torch.isfinite(full_loss):
+                    raise FloatingPointError(
+                        f"non-finite training loss at epoch={epoch}, step={step}"
+                    )
                 loss = full_loss / args.accum_steps
             scaler.scale(loss).backward()
             reached_requested_limit = bool(
@@ -263,6 +319,9 @@ def train(args: argparse.Namespace) -> dict:
         if is_best:
             best = {"epoch": epoch, **val_metrics}
             torch.save(model.state_dict(), checkpoint)
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
         row = {
             "epoch": epoch,
             "learning_rate": float(optimizer.param_groups[0]["lr"]),
@@ -287,6 +346,14 @@ def train(args: argparse.Namespace) -> dict:
         save_training_history(history, str(output_dir))
         print(json.dumps(row, ensure_ascii=False))
         scheduler.step()
+        if args.early_stopping_patience and (
+            epochs_without_improvement >= args.early_stopping_patience
+        ):
+            print(
+                f"Early stopping after {epoch} epochs; "
+                f"best epoch={best['epoch']}, best val_mIoU_fg={best['miou_fg']:.6f}"
+            )
+            break
 
     try:
         commit = subprocess.check_output(
@@ -299,6 +366,7 @@ def train(args: argparse.Namespace) -> dict:
         "encoder": "resnet50",
         "seed": args.seed,
         "epochs": args.epochs,
+        "epochs_completed": len(history),
         "git_commit": commit,
         "selection_metric": "val_mIoU_fg",
         "best_validation": best,
@@ -332,11 +400,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--boundary-weight", type=float, default=0.2)
     parser.add_argument("--encoder-weights", default="imagenet")
+    parser.add_argument("--init-checkpoint", default="")
+    parser.add_argument("--freeze-base", action="store_true")
+    parser.add_argument("--early-stopping-patience", type=int, default=0)
     args = parser.parse_args()
     if args.batch_size <= 0 or args.accum_steps <= 0:
         parser.error("batch-size and accum-steps must be positive")
     if args.boundary_weight < 0:
         parser.error("boundary-weight must be non-negative")
+    if args.early_stopping_patience < 0:
+        parser.error("early-stopping-patience must be non-negative")
+    if args.freeze_base and args.module != "gated_cmcr":
+        parser.error("freeze-base currently requires --module gated_cmcr")
+    if args.freeze_base and not args.init_checkpoint:
+        parser.error("freeze-base requires --init-checkpoint")
+    if args.freeze_base and not Path(args.init_checkpoint).is_file():
+        parser.error(f"init checkpoint not found: {args.init_checkpoint}")
     return args
 
 

@@ -24,6 +24,7 @@ from models.module_models import (
 from train_module_experiment import (
     DATA_METADATA_FILES,
     ExperimentLoss,
+    load_frozen_cmcr_base,
     fingerprint_dataset_metadata,
     masks_to_boundaries,
 )
@@ -110,6 +111,26 @@ def test_gated_cmcr_starts_as_exact_gated_model_and_trains_residual_head():
     assert gradient is not None
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
+
+
+def test_frozen_cmcr_loader_restores_parent_and_freezes_everything_else():
+    with tempfile.TemporaryDirectory() as directory:
+        checkpoint = Path(directory) / "gated.pth"
+        torch.manual_seed(2026)
+        parent = GatedBoundaryResNet50(encoder_weights=None).eval()
+        torch.save(parent.state_dict(), checkpoint)
+        torch.manual_seed(7)
+        enhanced = GatedCMCRResNet50(encoder_weights=None).eval()
+        report = load_frozen_cmcr_base(enhanced, str(checkpoint), torch.device("cpu"))
+        inputs = torch.randn(1, 5, 64, 64)
+        with torch.no_grad():
+            assert torch.equal(parent(inputs), enhanced(inputs))
+        assert report["missing_keys"]
+        assert all(key.startswith("cmcr.") for key in report["missing_keys"])
+        assert all(
+            parameter.requires_grad == name.startswith("cmcr.")
+            for name, parameter in enhanced.named_parameters()
+        )
 
 
 def test_val_diagnostic_experiment_filter_keeps_declared_order():
@@ -253,6 +274,24 @@ def test_standalone_and_combined_cmcr_configs_share_batch4_protocol():
     assert all(config["batch_size"] == 4 and config["accum_steps"] == 1 for config in configs)
     assert all(config["boundary_weight"] == 0.0 for config in configs)
     assert configs[0]["expected_metadata_sha256"] == configs[1]["expected_metadata_sha256"]
+
+
+def test_frozen_cmcr_config_has_epoch_zero_guard_protocol():
+    config = json.loads(
+        (
+            PROJECT_ROOT
+            / "configs"
+            / "v6_overlap40_frozen_gated_cmcr_batch4_seed42.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert config["module"] == "gated_cmcr"
+    assert config["freeze_base"] is True
+    assert config["epochs"] == 40
+    assert config["early_stopping_patience"] == 8
+    assert config["batch_size"] == 4 and config["accum_steps"] == 1
+    assert config["boundary_weight"] == 0.0
+    assert len(config["expected_init_checkpoint_sha256"]) == 64
+    assert config["automatic_test_evaluation"] is False
 
 
 def test_history_writer_preserves_extra_metrics():
