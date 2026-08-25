@@ -115,6 +115,9 @@ std  = [0.07239327406001447, 0.35159567816693277, 0.23999408652260576,
 | D-LinkNet-R50（adapted） | 2 / 2 | 59 | 0.5925 | — | — | — | — | — | B |
 | DSConv / Dynamic Snake | 2 / 2 | 69 | 0.633572 | 0.787906 | 0.154334 | 0.132158（15） | 0.590991 | 0.042580 | A |
 | Gated Boundary | 2 / 2 | 66 | 0.664128 | 0.793032 | 0.128904 | 0.167811（28） | 0.652185 | 0.011943 | A |
+| DeepLabV3+（模块脚本 batch2 控制） | 2 / 2 | 75 | 0.621450 | 0.753669 | 0.132218 | 0.149193（21） | 0.516317 | 0.105133 | A |
+| Gated，boundary weight=0 | 2 / 2 | 79 | 0.669135 | 0.792398 | 0.123263 | 0.128081（25） | 0.646148 | 0.022987 | A |
+| Gated，boundary weight=0（公平 batch4） | 4 / 1 | 78 | **0.718582** | 0.811205 | 0.092623 | 0.108832（11） | 0.714034 | 0.004549 | A |
 
 模块运行的有效 batch 均为 4，但物理 batch 为 2；DeepLab 基线物理 batch 为 4。BatchNorm 统计不同，因此当前模块结果不是完全严格的单变量消融。
 
@@ -240,14 +243,43 @@ DSConv 最终 Train/Val `mIoU_fg` 为 0.791124/0.590991，差距 20.01 pp；前�
 
 新模块方向由混淆矩阵决定：若 Background→Foreground FP 主导，优先做语义/模态一致性抑制假阳性；若前景类别互相混淆，优先做双视图地形—影像融合或类别上下文；若 FN 和断裂主导，才做方向上下文或拓扑连续性；只有边界带指标明显更差时，才继续边界模块。
 
+### 4.5 Gated 控制与公平 batch4 复验（2026-08-25）
+
+本节结果均只使用 Train/Val，按 `val_mIoU_fg` 选模，未自动评估 Test。新运行保存的 `dataset_protocol.json`、`dataset_summary.json`、`normalization_stats.json`、`tile_manifest.csv` 四个 SHA-256 与冻结配置完全一致，因此两个新控制实验的数据元文件版本可核验一致。
+
+| 实验 | physical batch / accum | Boundary weight | 最佳 epoch | Val mIoU_all | Val mIoU_fg |
+|---|---:|---:|---:|---:|---:|
+| DeepLab 模块脚本控制 | 2 / 2 | — | 75 | 0.694051 | 0.621450 |
+| Gated | 2 / 2 | 0.2 | 66 | 0.728539 | 0.664128 |
+| Gated 无边界辅助损失 | 2 / 2 | 0 | 79 | 0.732670 | 0.669135 |
+| 旧 DeepLab 正式基线 | 4 / 1 | — | 74 | 0.760405 | 0.703326 |
+| **Gated 无边界辅助损失，公平 batch4** | **4 / 1** | **0** | **78** | **0.772777** | **0.718582** |
+
+Gated batch4 最佳 Val 逐类结果：
+
+| 指标 | Background | WR | Rille | Fault | Graben |
+|---|---:|---:|---:|---:|---:|
+| IoU | 0.989558 | 0.763677 | 0.758315 | 0.595611 | 0.756727 |
+| Precision | 0.995810 | 0.852603 | 0.829691 | 0.697337 | 0.828129 |
+| Recall | 0.993695 | 0.879836 | 0.898113 | 0.803263 | 0.897715 |
+| F1 | 0.994751 | 0.866006 | 0.862547 | 0.746561 | 0.861519 |
+
+同为 physical batch4、seed=42 时，Gated 无边界辅助损失相对旧 DeepLab 的 Val `mIoU_fg` 从 0.703326 提升到 0.718582，即 **+0.015257（+1.53 pp）**；`mIoU_all` 提升 **+1.24 pp**。因此 Gated 融合登记为**单种子有效候选模块1**。它尚未经过多种子复验，不能写成稳定增益或最终 Test 增益。
+
+关闭边界辅助损失后，batch2 Gated 相对原 batch2 Gated 提升约 0.50 pp；由于旧运行没有保存数据指纹，该差值作为支持性证据，不单独作严格因果结论。`boundary_weight=0` 时产物仍记录原始 boundary loss，但 `total loss=semantic loss`，该项未参与反向优化。
+
+物理 batch 对结果影响显著：模块脚本 DeepLab 的 batch2 `mIoU_fg=0.621450`，旧 batch4 DeepLab 为 0.703326；Gated 无边界辅助损失从 batch2 的 0.669135 升至 batch4 的 0.718582。后续正式模块筛选统一使用 physical batch4，不再把 batch2 模块结果与 batch4 基线直接比较。
+
+Gated batch4 在 epoch 78 达峰值，最终 epoch 为 0.714034，回落 0.45 pp；后20轮 Val `mIoU_fg` 标准差约 0.00167、极差约 0.00545。最佳 epoch 的 Train−Val gap 为 9.26 pp，仍有过拟合，但稳定性明显优于旧 batch2 Gated。当前最弱类仍是 Fault（IoU 0.595611），模块2方向必须结合统一 Val 混淆矩阵进一步确定。
+
 ## 5. 当前可支持的模型结论
 
 1. 统一选模重跑的 DeepLabV3+-ResNet50 是当前主基线：Test `mIoU_fg=0.6942`（证据 B，待补下载产物）。
 2. LTL-Net+TPD 的旧单种子 Test `mIoU_fg=0.696738`，相对旧 DeepLab 为 +0.003822；增益只有 0.38 pp，主要来自 Rille（+1.75 pp），Graben 反而下降 0.42 pp，因此 TPD 不能登记为稳定有效模块。
 3. U-Net 的 Test `mIoU_fg=0.6824`，低于统一 DeepLab 约 1.18 pp；但 Rille IoU 0.7458，显示结构存在类别偏好。
 4. D-LinkNet-R50 adapted 的 Test `mIoU_fg=0.6030`，比统一 DeepLab 低 9.12 pp；由于其约 1.80 亿参数、物理 batch=2 且是 R50 适配版，只能说明当前适配和配置较差，不能推断原始 D-LinkNet 方法普遍较差。
-5. DSConv 与 Gated Boundary 在 Val 上分别比统一 DeepLab 低 6.47 pp 和 3.42 pp，且 Train−Val gap 达 15.43 pp 和 12.89 pp；当前配置暂停进入总体架构，但在同物理 batch 控制完成前不把全部退化归因于模块结构。
-6. 当前没有任何模块被证实能稳定贡献 2–3 pp 的 `mIoU_fg` 增益。
+5. DSConv 与旧 Gated Boundary 的 batch2 配置不进入总体架构；同物理 batch2 控制证明二者的旧结果受到严重 batch/BN 混杂，不能作为模块思想无效的证据。
+6. Gated 无边界辅助损失在 physical batch4、seed42 上取得 Val `mIoU_fg=0.718582`，相对同为 batch4 的旧 DeepLab 峰值提升 1.53 pp，登记为单种子有效候选模块1；尚未完成多种子和最终冻结 Test，不能称为稳定增益。
 
 ## 6. 证据路径与缺失项
 
@@ -257,6 +289,9 @@ DSConv 最终 Train/Val `mIoU_fg` 为 0.791124/0.590991，差距 20.01 pp；前�
 - LTL-Net + TPD：`results/v6_overlap40/LTLNet_seed42_formal180/`
 - DSConv：`results/v6_overlap40/M2/DSConv/`
 - Gated Boundary：`results/v6_overlap40/M3/gated/`
+- DeepLab batch2 控制：`results/v6_overlap40/deeplab_resnet50_batch2_control/`
+- Gated 无边界损失 batch2：`results/v6_overlap40/gated_boundary_resnet50_no_boundary/`
+- Gated 无边界损失 batch4：`results/v6_overlap40/gated_boundary_resnet50_bw0_batch4/`
 - 数据协议审计：`results/data_audit_v6_random_overlap40/`
 
 ### 6.2 仅有旧文档记录、待补原始产物

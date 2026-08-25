@@ -46,6 +46,11 @@ EXPERIMENTS = (
         "gated_boundary",
         Path("gated_boundary_resnet50_no_boundary/best_model.pth"),
     ),
+    Experiment(
+        "gated_without_boundary_loss_batch4",
+        "gated_boundary",
+        Path("gated_boundary_resnet50_bw0_batch4/best_model.pth"),
+    ),
 )
 
 
