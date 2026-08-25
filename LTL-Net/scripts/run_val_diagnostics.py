@@ -1,7 +1,7 @@
 """Run overlap40 validation diagnostics in interactive single-model or batch mode.
 
-Running this file without arguments prompts for a model result folder and an
-output folder. Use ``--all`` for the registered multi-model comparison.
+Running this file without arguments evaluates ``DEFAULT_MODEL_FOLDER`` and
+writes to its ``val_diagnostics`` subfolder. Use ``--all`` for batch mode.
 """
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = Path(r"E:\月球_dataset\dataset\dataset_v6_random811_overlap40")
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT / "results" / "v6_overlap40"
 DEFAULT_OUTPUT_ROOT = DEFAULT_RESULTS_ROOT / "val_diagnostics"
+# 每次只修改这一行，填入刚训练完成且包含 best_model.pth 的结果文件夹。
+DEFAULT_MODEL_FOLDER = Path(
+    r"D:\pycharm\lunar-linear\LTL-Net\results\v6_overlap40\gated_boundary_resnet50_bw0_batch4"
+)
 CLASS_NAMES = ("background", "wr", "rille", "fault", "graben")
 
 
@@ -61,7 +65,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--all", action="store_true", help="运行注册表中的全部模型")
-    parser.add_argument("--model-folder", type=Path, help="单模型结果目录，需包含 best_model.pth")
+    parser.add_argument(
+        "--model-folder",
+        type=Path,
+        default=DEFAULT_MODEL_FOLDER,
+        help="单模型结果目录；默认读取脚本顶部 DEFAULT_MODEL_FOLDER",
+    )
     parser.add_argument("--single-output-dir", type=Path, help="单模型诊断输出目录")
     parser.add_argument(
         "--model-type",
@@ -102,10 +111,6 @@ def selected_experiments(names: list[str] | None) -> list[Experiment]:
         return list(EXPERIMENTS)
     selected = set(names)
     return [experiment for experiment in EXPERIMENTS if experiment.name in selected]
-
-
-def clean_input_path(value: str) -> Path:
-    return Path(value.strip().strip('"').strip("'"))
 
 
 def discover_checkpoint(model_folder: Path) -> Path:
@@ -281,28 +286,19 @@ def preflight_data(args: argparse.Namespace, data_dir: Path) -> None:
 
 
 def run_single(args: argparse.Namespace) -> int:
-    default_data = str(args.data_dir)
-    data_text = input(f"数据集根目录 [{default_data}]: ").strip()
-    data_dir = validate_data_dir(clean_input_path(data_text) if data_text else args.data_dir)
-
-    if args.model_folder is None:
-        folder_text = input("模型结果文件夹（包含 best_model.pth）: ").strip()
-        if not folder_text:
-            raise ValueError("必须输入模型结果文件夹")
-        model_folder = clean_input_path(folder_text).expanduser().resolve()
-    else:
-        model_folder = args.model_folder.expanduser().resolve()
+    data_dir = validate_data_dir(args.data_dir)
+    model_folder = args.model_folder.expanduser().resolve()
     if not model_folder.is_dir():
         raise FileNotFoundError(model_folder)
 
     checkpoint = discover_checkpoint(model_folder)
     model_type = args.model_type or discover_model_type(model_folder)
     default_output = model_folder / "val_diagnostics"
-    if args.single_output_dir is None:
-        output_text = input(f"输出目录 [{default_output}]: ").strip()
-        output_dir = clean_input_path(output_text).expanduser().resolve() if output_text else default_output
-    else:
-        output_dir = args.single_output_dir.expanduser().resolve()
+    output_dir = (
+        args.single_output_dir.expanduser().resolve()
+        if args.single_output_dir is not None
+        else default_output
+    )
 
     preflight_data(args, data_dir)
     metrics_file = output_dir / "evaluation_metrics.json"
