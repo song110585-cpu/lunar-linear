@@ -67,6 +67,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument("--skip-qualitative", action="store_true")
     parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="显式启用评价 AMP；默认 FP32。若出现 NaN/Inf 请勿使用",
+    )
+    parser.add_argument(
         "--skip-data-check",
         action="store_true",
         help="跳过推理前的 Val TIFF 完整读取检查（不推荐）",
@@ -152,6 +157,8 @@ def build_command(
         command.extend(("--max-steps", str(args.max_steps)))
     if args.skip_qualitative:
         command.append("--skip-qualitative")
+    if args.amp:
+        command.append("--amp")
     if sample_names_file is not None and sample_names_file.is_file():
         command.extend(("--sample-names-file", str(sample_names_file)))
     return command

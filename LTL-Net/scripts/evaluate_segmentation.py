@@ -290,6 +290,11 @@ def main():
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=0)
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="启用 CUDA autocast；默认使用 FP32，避免部分消费级 GPU 推理产生非有限 logits",
+    )
     parser.add_argument("--skip-qualitative", action="store_true")
     parser.add_argument("--samples-per-group", type=int, default=4)
     parser.add_argument("--sample-names-file", default=None,
@@ -343,9 +348,14 @@ def main():
                 break
             images = images.to(device)
             targets_device = targets.to(device)
-            with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+            with torch.amp.autocast("cuda", enabled=args.amp and device.type == "cuda"):
                 logits, boundary_logits = forward_outputs(model, images, args.model)
                 batch_loss = loss_fn(logits, targets_device)
+            if not torch.isfinite(logits).all():
+                raise FloatingPointError(
+                    f"{args.model} 在 {args.split} step={step} 产生 NaN/Inf logits；"
+                    "请关闭 --amp 或减小 --batch-size，禁止继续汇总 argmax 指标"
+                )
             losses.append(float(batch_loss.item()))
             preds = logits.argmax(dim=1).cpu()
             update_boundary_counts(boundary_counts, preds, targets, (1, 2, 4, 8))
