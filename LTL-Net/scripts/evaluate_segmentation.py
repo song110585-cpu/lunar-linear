@@ -33,7 +33,13 @@ from train_module_experiment import masks_to_boundaries
 
 
 CLASS_NAMES = ["Background", "WR", "Rille", "Fault", "Graben"]
-MODULE_MODEL_NAMES = {"deeplab", "dsconv", "gated_boundary", "gated_cmcr"}
+MODULE_MODEL_NAMES = {
+    "deeplab",
+    "deeplab_cmcr",
+    "dsconv",
+    "gated_boundary",
+    "gated_cmcr",
+}
 GATED_MODEL_NAMES = {"gated_boundary", "gated_cmcr"}
 LABEL_CMAP = ListedColormap(["#111111", "#f4d03f", "#2e86de", "#e74c3c", "#af7ac5"])
 ERROR_CMAP = ListedColormap(["#111111", "#e74c3c", "#3498db", "#f1c40f"])
@@ -344,7 +350,7 @@ def main():
     normalized_model = args.model.lower().replace("-", "_")
     if normalized_model in GATED_MODEL_NAMES:
         register_gate_hook(model.boundary_refinement.gate, gate_stats)
-    if normalized_model == "gated_cmcr":
+    if normalized_model in {"deeplab_cmcr", "gated_cmcr"}:
         register_gate_hook(model.cmcr.consistency_gate, cmcr_gate_stats)
     losses = []
     rows = []

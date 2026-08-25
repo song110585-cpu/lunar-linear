@@ -205,6 +205,25 @@ class CrossModalConsistencyResidual(nn.Module):
         )
 
 
+class DeepLabCMCRResNet50(DeepLabResNet50):
+    """Unmodified DeepLabV3+ plus the standalone CMCR correction."""
+
+    def __init__(
+        self,
+        encoder_weights: str | None = "imagenet",
+        classes: int = 5,
+        cmcr_channels: int = 32,
+    ) -> None:
+        super().__init__(encoder_weights=encoder_weights, classes=classes)
+        self.cmcr = CrossModalConsistencyResidual(
+            feature_channels=cmcr_channels, classes=classes
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logits = super().forward(x)
+        return logits + self.cmcr(x, logits.shape[-2:])
+
+
 class GatedCMCRResNet50(GatedBoundaryResNet50):
     """Semantic-gated detail fusion plus cross-modal consistency correction."""
 
@@ -240,6 +259,8 @@ def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> n
         return DSConvResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_boundary", "gated_boundary_resnet50"}:
         return GatedBoundaryResNet50(encoder_weights=encoder_weights)
+    if normalized in {"deeplab_cmcr", "deeplab_cmcr_resnet50"}:
+        return DeepLabCMCRResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_cmcr", "gated_cmcr_resnet50"}:
         return GatedCMCRResNet50(encoder_weights=encoder_weights)
     raise ValueError(f"unknown module model: {name}")

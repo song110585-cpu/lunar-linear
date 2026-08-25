@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--single-output-dir", type=Path, help="单模型诊断输出目录")
     parser.add_argument(
         "--model-type",
-        choices=("deeplab", "dsconv", "gated_boundary", "gated_cmcr"),
+        choices=("deeplab", "deeplab_cmcr", "dsconv", "gated_boundary", "gated_cmcr"),
         help="通常由 config.json/metrics.json 自动识别",
     )
     parser.add_argument(
@@ -129,6 +129,7 @@ def discover_model_type(model_folder: Path) -> str:
     aliases = {
         "deeplab": "deeplab",
         "deeplabv3plus": "deeplab",
+        "deeplab_cmcr": "deeplab_cmcr",
         "dsconv": "dsconv",
         "gated_boundary": "gated_boundary",
         "gated_cmcr": "gated_cmcr",

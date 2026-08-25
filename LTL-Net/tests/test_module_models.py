@@ -15,6 +15,7 @@ for path in (PROJECT_ROOT, PROJECT_ROOT / "scripts"):
 
 from models.dynamic_snake import DynamicSnakeConv2d
 from models.module_models import (
+    DeepLabCMCRResNet50,
     DeepLabResNet50,
     DSConvResNet50,
     GatedBoundaryResNet50,
@@ -71,6 +72,22 @@ def test_gated_boundary_output_contract():
         output = model.forward_with_aux(torch.randn(1, 5, 64, 64))
     assert output["logits"].shape == (1, 5, 64, 64)
     assert output["boundary_logits"].shape == (1, 1, 32, 32)
+
+
+def test_deeplab_cmcr_starts_as_exact_deeplab_and_trains_residual_head():
+    torch.manual_seed(2026)
+    base = DeepLabResNet50(encoder_weights=None).eval()
+    torch.manual_seed(2026)
+    enhanced = DeepLabCMCRResNet50(encoder_weights=None).eval()
+    inputs = torch.randn(1, 5, 64, 64)
+    with torch.no_grad():
+        assert torch.equal(base(inputs), enhanced(inputs))
+    loss = enhanced(inputs)[..., 8:56, 8:56].mean()
+    loss.backward()
+    gradient = enhanced.cmcr.residual_head.weight.grad
+    assert gradient is not None
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient) > 0
 
 
 def test_gated_cmcr_starts_as_exact_gated_model_and_trains_residual_head():
@@ -222,15 +239,15 @@ def test_control_configs_are_val_only_and_single_variable():
     assert configs[0]["expected_metadata_sha256"] == configs[1]["expected_metadata_sha256"]
 
 
-def test_cmcr_and_gated_replication_configs_share_batch4_protocol():
+def test_standalone_and_combined_cmcr_configs_share_batch4_protocol():
     config_dir = PROJECT_ROOT / "configs"
     names = (
+        "v6_overlap40_deeplab_cmcr_batch4_seed42.json",
         "v6_overlap40_gated_cmcr_batch4_seed42.json",
-        "v6_overlap40_gated_no_boundary_batch4_seed1337.json",
     )
     configs = [json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names]
-    assert [config["module"] for config in configs] == ["gated_cmcr", "gated_boundary"]
-    assert [config["seed"] for config in configs] == [42, 1337]
+    assert [config["module"] for config in configs] == ["deeplab_cmcr", "gated_cmcr"]
+    assert [config["seed"] for config in configs] == [42, 42]
     assert all(config["automatic_test_evaluation"] is False for config in configs)
     assert all(config["selection_metric"] == "val_mIoU_fg" for config in configs)
     assert all(config["batch_size"] == 4 and config["accum_steps"] == 1 for config in configs)

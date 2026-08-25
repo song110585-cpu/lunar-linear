@@ -318,7 +318,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--module",
         required=True,
-        choices=("deeplab", "dsconv", "gated_boundary", "gated_cmcr"),
+        choices=("deeplab", "deeplab_cmcr", "dsconv", "gated_boundary", "gated_cmcr"),
     )
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)

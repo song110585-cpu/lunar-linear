@@ -1,6 +1,7 @@
 from .ltl_net import LTLNet, TPDDecoder
 from .module_models import (
     DeepLabResNet50,
+    DeepLabCMCRResNet50,
     DSConvResNet50,
     GatedBoundaryResNet50,
     GatedCMCRResNet50,
@@ -11,6 +12,7 @@ __all__ = [
     "LTLNet",
     "TPDDecoder",
     "DeepLabResNet50",
+    "DeepLabCMCRResNet50",
     "DSConvResNet50",
     "GatedBoundaryResNet50",
     "GatedCMCRResNet50",
