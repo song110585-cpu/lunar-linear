@@ -340,6 +340,32 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 
 结论：FEC 登记为**单种子、小幅正收益候选模块C**，但现有 A+C 没有组合增益且未实现预期的总体假阳性抑制。当前总体架构仍保留 A，淘汰现有 A+C；不得写成“FEC 提升最终模型”。不建议继续扫描 foreground weight，因为当前方向性证据显示问题不只是损失权重，而是二元证据在联合语义优化下形成了召回—精度重新分配。
 
+### 4.8 冻结 Gated 后训练 CMCR 的两阶段控制（2026-08-26）
+
+该实验加载已核验的 Gated batch4、`boundary_weight=0` checkpoint（SHA-256 `f75fc145626053b7a5da39905295c289a6fc8665f1c555a2729c83ef0586891f`），冻结 Gated 母模型，仅训练零初始化 CMCR 的42,133个参数。数据为同一 overlap40 指纹，ResNet50、seed42、physical batch4/accum1、学习率1e-4、最多40 epochs、patience8、`val_mIoU_fg` 选模，不评估 Test；Git commit 为 `982d36d`。训练在第37轮早停，最佳为第29轮。
+
+统一 FP32 Val 诊断独立复算 `mIoU_fg=0.721621`，与训练保存值0.721608仅差0.0013 pp。与同一母 checkpoint 的统一诊断结果比较：
+
+| 模型 | Val mIoU_all | Val mIoU_fg | WR IoU | Rille IoU | Fault IoU | Graben IoU |
+|---|---:|---:|---:|---:|---:|---:|
+| Gated（A） | 0.772771 | 0.718574 | 0.763688 | 0.758272 | 0.595609 | 0.756727 |
+| 冻结A后训练CMCR（A→B） | 0.775255 | 0.721621 | 0.764534 | 0.761133 | 0.599586 | 0.761233 |
+| A→B 相对 A | +0.002484 | **+0.003048（+0.30 pp）** | +0.000846 | +0.002861 | +0.003977 | +0.004506 |
+
+四个前景类别 IoU 全部提高，组合收益不是牺牲 Fault 换取其他类别。误差结构显示 CMCR 主要进行了精度—召回再平衡：
+
+| 模型 | Background→Foreground FP | Foreground→Background FN | 容差2 px边界 F1 | 容差4 px边界 F1 |
+|---|---:|---:|---:|---:|
+| Gated（A） | 320,316 | 212,183 | 0.728015 | 0.855276 |
+| 冻结A后训练CMCR（A→B） | 295,348 | 225,546 | 0.737319 | 0.858433 |
+| 变化 | -24,968 | +13,363 | +0.009304 | +0.003157 |
+
+相对 A，A→B 减少约7.8%的前景假阳性，同时增加约6.3%的前景漏检；四类 Precision 均上升、Recall 均下降，但最终四类 IoU 与多尺度边界 F1 均改善。CMCR gate 均值0.51487、标准差0.11239，极低/极高激活比例均不足0.1%，没有饱和或关闭。
+
+第1轮 Val `mIoU_fg=0.720337`，已经高于 A；随后缓慢上升并在第29轮达到0.721608，之后8轮没有再创新高而早停，因此最佳值不是孤立尖峰。但最佳轮 Train−Val `mIoU_fg` gap 为11.40 pp，Train loss约0.0131而 Val loss约0.1619，存在明显泛化差距。该差距部分继承自冻结母模型，仍要求用第二个 CMCR 随机初始化/数据顺序复验，不能据单种子宣称稳定增益。
+
+结论：此前 A+B 从头联合训练较 A 下降1.03 pp，而冻结 A、仅训练 B 后较 A 提升0.30 pp并首次达到 Val `mIoU_fg>0.72`。这支持“CMCR 有条件有效，主要问题是联合共适应冲突”，当前保留**两阶段 A→B**作为最佳总体架构候选；其训练规程必须作为方法的一部分明确报告，不能与从头联合 A+B 混写。待完成第二种子复验与架构冻结后，才能进行一次最终 Test。
+
 ## 5. 当前可支持的模型结论
 
 1. 统一选模重跑的 DeepLabV3+-ResNet50 是当前主基线：Test `mIoU_fg=0.6942`（证据 B，待补下载产物）。
@@ -351,6 +377,7 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 7. CMCR 单独取得 Val `mIoU_fg=0.709767`，相对旧 DeepLab batch4 提升0.64 pp，登记为单种子、小幅正收益候选模块2。
 8. Gated+CMCR 仅为0.708320，较 Gated 下降1.03 pp，并同时增加前景 FP 与 FN；现有联合结构淘汰，当前最佳总体模型仍是 Gated。
 9. FEC 单独取得 Val `mIoU_fg=0.710308`，相对旧 DeepLab batch4提升0.70 pp；但 Gated+FEC 为0.717935，较 Gated低0.06 pp，且没有改善 Fault 或总体假阳性，因此现有 A+C 淘汰。
+10. 冻结已训练 Gated、仅训练 CMCR 的两阶段 A→B 取得统一复算 Val `mIoU_fg=0.721621`，较 A 提升0.30 pp，四个前景类别 IoU 均提高；当前登记为单种子最佳总体架构候选，尚需第二种子复验，不能写成稳定或 Test 增益。
 
 ## 6. 证据路径与缺失项
 
@@ -368,6 +395,8 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 - 统一 Val 诊断（含混淆矩阵、边界指标和错误图）：`results/v6_overlap40/val_diagnostics/{gated_without_boundary_loss_batch4,CMCR,gate+CMCR}/`
 - FEC 两项产物（目录名放反，以内部模型字段为准）：`results/v6_overlap40/{FEC,gate+FEC}/`
 - FEC 统一 Val 诊断：`results/v6_overlap40/val_diagnostics/{deeplab_fec,gated_fec}/`
+- 冻结 Gated 后训练 CMCR：`results/v6_overlap40/gated_cmcr_resnet50_frozen_gated_seed42_batch4/`
+- 冻结 A→B 统一 Val 诊断：`results/v6_overlap40/gated_cmcr_resnet50_frozen_gated_seed42_batch4/val_diagnostics/`
 - 数据协议审计：`results/data_audit_v6_random_overlap40/`
 
 ### 6.2 仅有旧文档记录、待补原始产物

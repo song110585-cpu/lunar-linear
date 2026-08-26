@@ -312,21 +312,32 @@ def test_standalone_and_combined_cmcr_configs_share_batch4_protocol():
 
 
 def test_frozen_cmcr_config_has_epoch_zero_guard_protocol():
-    config = json.loads(
-        (
-            PROJECT_ROOT
-            / "configs"
-            / "v6_overlap40_frozen_gated_cmcr_batch4_seed42.json"
-        ).read_text(encoding="utf-8")
+    config_dir = PROJECT_ROOT / "configs"
+    names = (
+        "v6_overlap40_frozen_gated_cmcr_batch4_seed42.json",
+        "v6_overlap40_frozen_gated_cmcr_batch4_seed3407.json",
     )
-    assert config["module"] == "gated_cmcr"
-    assert config["freeze_base"] is True
-    assert config["epochs"] == 40
-    assert config["early_stopping_patience"] == 8
-    assert config["batch_size"] == 4 and config["accum_steps"] == 1
-    assert config["boundary_weight"] == 0.0
-    assert len(config["expected_init_checkpoint_sha256"]) == 64
-    assert config["automatic_test_evaluation"] is False
+    configs = [json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names]
+    assert [config["seed"] for config in configs] == [42, 3407]
+    for config in configs:
+        assert config["module"] == "gated_cmcr"
+        assert config["freeze_base"] is True
+        assert config["epochs"] == 40
+        assert config["early_stopping_patience"] == 8
+        assert config["batch_size"] == 4 and config["accum_steps"] == 1
+        assert config["boundary_weight"] == 0.0
+        assert len(config["expected_init_checkpoint_sha256"]) == 64
+        assert config["automatic_test_evaluation"] is False
+    controlled_fields = {
+        "experiment",
+        "hypothesis",
+        "unique_variable",
+        "seed",
+        "run_name",
+    }
+    for key in configs[0]:
+        if key not in controlled_fields:
+            assert configs[0][key] == configs[1][key], key
 
 
 def test_fec_configs_share_the_controlled_batch4_protocol():

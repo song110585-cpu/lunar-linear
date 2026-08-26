@@ -285,6 +285,7 @@ def train(args: argparse.Namespace) -> dict:
     checkpoint = output_dir / "best_model.pth"
     history: list[dict] = []
     best: dict | None = None
+    initial_validation: dict | None = None
 
     config = vars(args).copy()
     config.update(
@@ -308,14 +309,18 @@ def train(args: argparse.Namespace) -> dict:
 
     epochs_without_improvement = 0
     if args.freeze_base:
-        baseline_validation = evaluate(
+        initial_validation = evaluate(
             model, val_loader, criterion, device, with_aux, args.max_steps
         )
-        best = {"epoch": 0, **baseline_validation}
+        best = {"epoch": 0, **initial_validation}
         torch.save(model.state_dict(), checkpoint)
+        (output_dir / "initial_validation.json").write_text(
+            json.dumps(initial_validation, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         print(
             json.dumps(
-                {"frozen_base_epoch_zero": baseline_validation},
+                {"frozen_base_epoch_zero": initial_validation},
                 ensure_ascii=False,
             )
         )
@@ -428,6 +433,10 @@ def train(args: argparse.Namespace) -> dict:
         "epochs_completed": len(history),
         "git_commit": commit,
         "selection_metric": "val_mIoU_fg",
+        "initial_validation": initial_validation,
+        "initial_validation_file": (
+            "initial_validation.json" if initial_validation is not None else None
+        ),
         "best_validation": best,
         "checkpoint": str(checkpoint),
         "test_evaluated": False,
