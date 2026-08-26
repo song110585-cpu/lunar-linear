@@ -315,10 +315,11 @@ def test_frozen_cmcr_config_has_epoch_zero_guard_protocol():
     config_dir = PROJECT_ROOT / "configs"
     names = (
         "v6_overlap40_frozen_gated_cmcr_batch4_seed42.json",
+        "v6_overlap40_frozen_gated_cmcr_batch4_seed1337.json",
         "v6_overlap40_frozen_gated_cmcr_batch4_seed3407.json",
     )
     configs = [json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names]
-    assert [config["seed"] for config in configs] == [42, 3407]
+    assert [config["seed"] for config in configs] == [42, 1337, 3407]
     for config in configs:
         assert config["module"] == "gated_cmcr"
         assert config["freeze_base"] is True
@@ -337,7 +338,7 @@ def test_frozen_cmcr_config_has_epoch_zero_guard_protocol():
     }
     for key in configs[0]:
         if key not in controlled_fields:
-            assert configs[0][key] == configs[1][key], key
+            assert all(config[key] == configs[0][key] for config in configs[1:]), key
 
 
 def test_fec_configs_share_the_controlled_batch4_protocol():
