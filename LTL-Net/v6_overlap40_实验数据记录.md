@@ -342,7 +342,7 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 
 ### 4.8 冻结 Gated 后训练 CMCR 的两阶段控制（2026-08-26）
 
-该实验加载已核验的 Gated batch4、`boundary_weight=0` checkpoint（SHA-256 `f75fc145626053b7a5da39905295c289a6fc8665f1c555a2729c83ef0586891f`），冻结 Gated 母模型，仅训练零初始化 CMCR 的42,133个参数。数据为同一 overlap40 指纹，ResNet50、seed42、physical batch4/accum1、学习率1e-4、最多40 epochs、patience8、`val_mIoU_fg` 选模，不评估 Test；Git commit 为 `982d36d`。训练在第37轮早停，最佳为第29轮。
+该实验加载已核验的 Gated batch4、`boundary_weight=0` checkpoint（SHA-256 `f75fc145626053b7a5da39905295c289a6fc8665f1c555a2729c83ef0586891f`），冻结 Gated 母模型，仅训练零初始化 CMCR 的42,133个参数。数据为同一 overlap40 指纹，ResNet50、physical batch4/accum1、学习率1e-4、最多40 epochs、patience8、`val_mIoU_fg` 选模，不评估 Test。先完成seed42控制，再用seed1337和3407仅改变 CMCR 初始化及训练数据顺序；三次运行的其余训练条件和母 checkpoint 不变。
 
 统一 FP32 Val 诊断独立复算 `mIoU_fg=0.721621`，与训练保存值0.721608仅差0.0013 pp。与同一母 checkpoint 的统一诊断结果比较：
 
@@ -362,9 +362,20 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 
 相对 A，A→B 减少约7.8%的前景假阳性，同时增加约6.3%的前景漏检；四类 Precision 均上升、Recall 均下降，但最终四类 IoU 与多尺度边界 F1 均改善。CMCR gate 均值0.51487、标准差0.11239，极低/极高激活比例均不足0.1%，没有饱和或关闭。
 
-第1轮 Val `mIoU_fg=0.720337`，已经高于 A；随后缓慢上升并在第29轮达到0.721608，之后8轮没有再创新高而早停，因此最佳值不是孤立尖峰。但最佳轮 Train−Val `mIoU_fg` gap 为11.40 pp，Train loss约0.0131而 Val loss约0.1619，存在明显泛化差距。该差距部分继承自冻结母模型，仍要求用第二个 CMCR 随机初始化/数据顺序复验，不能据单种子宣称稳定增益。
+第1轮 Val `mIoU_fg=0.720337`，已经高于 A；随后缓慢上升并在第29轮达到0.721608，之后8轮没有再创新高而早停，因此最佳值不是孤立尖峰。但最佳轮 Train−Val `mIoU_fg` gap 为11.40 pp，Train loss约0.0131而 Val loss约0.1619，存在明显泛化差距；该差距部分继承自冻结母模型。
 
-结论：此前 A+B 从头联合训练较 A 下降1.03 pp，而冻结 A、仅训练 B 后较 A 提升0.30 pp并首次达到 Val `mIoU_fg>0.72`。这支持“CMCR 有条件有效，主要问题是联合共适应冲突”，当前保留**两阶段 A→B**作为最佳总体架构候选；其训练规程必须作为方法的一部分明确报告，不能与从头联合 A+B 混写。待完成第二种子复验与架构冻结后，才能进行一次最终 Test。
+三种子结果均已下载并完成统一 FP32 Val 独立复算，保存指标与复算差异不超过0.0018 pp；两个新增 checkpoint 均无 NaN/Inf，数据指纹、母 checkpoint SHA、42,133个可训练参数和未访问 Test 标志均核验通过：
+
+| CMCR阶段 seed | Git commit | 完成/最佳 epoch | 初始 Val mIoU_fg | 复算最佳 Val mIoU_fg | 相对统一 A |
+|---:|---|---:|---:|---:|---:|
+| 42 | `982d36d` | 37 / 29 | 同一A（复算0.718574） | 0.721621 | +0.003048 |
+| 1337 | `1b321f0` | 23 / 15 | 0.718551 | 0.721687 | +0.003113 |
+| 3407 | `bbc544c` | 24 / 16 | 0.718551 | 0.721427 | +0.002853 |
+| **均值±样本标准差** | — | — | — | **0.721578 ± 0.000135** | **+0.003004 ± 0.000135** |
+
+三种子逐类 IoU 的均值±样本标准差为：WR `0.764537±0.000184`、Rille `0.761195±0.000058`、Fault `0.599058±0.000513`、Graben `0.761524±0.000282`。相对统一 A 的逐类平均增益分别为+0.08、+0.29、+0.34和+0.48 pp，四类增益方向全部一致。三种子平均前景 FP 为297,067，较 A 减少23,249；平均前景 FN 为224,633，较 A 增加12,450，稳定表现为降低假阳性、牺牲少量召回。容差2 px边界 F1 三种子均值约0.736755，较 A 提升0.87 pp。
+
+结论：此前 A+B 从头联合训练较 A 下降1.03 pp，而冻结 A、仅训练 B 后三种子平均提升0.30 pp并稳定达到 Val `mIoU_fg>0.72`。这支持“CMCR 对固定 A 的条件增益稳定，主要问题是联合共适应冲突”，当前保留**两阶段 A→B**作为最佳总体架构候选；其训练规程必须作为方法的一部分明确报告，不能与从头联合 A+B 混写。这里的三种子只改变 B 阶段，尚不能替代从头重训不同 A 的完整流程复验；完成至少一次新 A→B 后再冻结架构并进行一次最终 Test。
 
 ## 5. 当前可支持的模型结论
 
@@ -377,7 +388,7 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 7. CMCR 单独取得 Val `mIoU_fg=0.709767`，相对旧 DeepLab batch4 提升0.64 pp，登记为单种子、小幅正收益候选模块2。
 8. Gated+CMCR 仅为0.708320，较 Gated 下降1.03 pp，并同时增加前景 FP 与 FN；现有联合结构淘汰，当前最佳总体模型仍是 Gated。
 9. FEC 单独取得 Val `mIoU_fg=0.710308`，相对旧 DeepLab batch4提升0.70 pp；但 Gated+FEC 为0.717935，较 Gated低0.06 pp，且没有改善 Fault 或总体假阳性，因此现有 A+C 淘汰。
-10. 冻结已训练 Gated、仅训练 CMCR 的两阶段 A→B 取得统一复算 Val `mIoU_fg=0.721621`，较 A 提升0.30 pp，四个前景类别 IoU 均提高；当前登记为单种子最佳总体架构候选，尚需第二种子复验，不能写成稳定或 Test 增益。
+10. 冻结已训练 Gated、仅训练 CMCR 的两阶段 A→B 在三个 CMCR 阶段种子上取得统一复算 Val `mIoU_fg=0.721578±0.000135`，较 A 平均提升0.30 pp，四个前景类别平均 IoU 均提高；可写成“对固定 A 的条件增益在三种子上稳定”，但尚不能写成完整模型或 Test 稳定增益。
 
 ## 6. 证据路径与缺失项
 
@@ -397,6 +408,8 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 - FEC 统一 Val 诊断：`results/v6_overlap40/val_diagnostics/{deeplab_fec,gated_fec}/`
 - 冻结 Gated 后训练 CMCR：`results/v6_overlap40/gated_cmcr_resnet50_frozen_gated_seed42_batch4/`
 - 冻结 A→B 统一 Val 诊断：`results/v6_overlap40/gated_cmcr_resnet50_frozen_gated_seed42_batch4/val_diagnostics/`
+- 冻结 A→B 的 seed1337/3407：`results/v6_overlap40/gated_cmcr_resnet50_frozen_gated_seed{1337,3407}_batch4/`
+- seed1337/3407 统一 Val 诊断：上述各目录的 `val_diagnostics/`
 - 数据协议审计：`results/data_audit_v6_random_overlap40/`
 
 ### 6.2 仅有旧文档记录、待补原始产物
