@@ -305,6 +305,41 @@ CMCR 单独相对 A 表现为更高召回、更多背景假阳性；组合相对
 
 结论：CMCR 登记为**单种子、小幅正收益候选模块2**，但与 Gated 联合从头训练存在负交互。当前总体架构保留 Gated（A），淘汰现有 A+B 组合；CMCR 可作为独立消融证据，不能宣称其提高了最终 Gated 模型。若继续验证 CMCR，只允许做“冻结已训练 A、仅训练零初始化 CMCR 残差”的两阶段控制，不能重复无约束联合训练。
 
+### 4.7 FEC 独立消融与 Gated+FEC 组合（2026-08-26）
+
+Foreground Evidence Calibration（FEC）受 FarSeg（CVPR 2020）显式前景建模与抑制遥感复杂背景假警报的思想启发，但不是对 FarSeg 的 F-S relation 或 F-A optimization 的复现。当前实现从 decoder 特征预测 Background/Foreground 二元证据，以有界、零初始化的残差校准背景与四类前景 logits；辅助前景 BCE 权重为0.1。两项实验均为 overlap40、ResNet50、seed42、80 epochs、physical batch4/accum1、学习率5e-5、`val_mIoU_fg` 选模，不评估 Test，Git commit 为 `982d36d`。
+
+下载产物存在目录命名放反：本地 `results/v6_overlap40/FEC/` 内实际 `model=gated_fec`（A+C），而 `results/v6_overlap40/gate+FEC/` 内实际 `model=deeplab_fec`（C）。以下判断一律以 `config.json/metrics.json` 的模型字段为准，不按文件夹名推断。
+
+| 实验 | 最佳 epoch | Val mIoU_all | Val mIoU_fg | 相对旧 DeepLab batch4 | 相对 Gated batch4 |
+|---|---:|---:|---:|---:|---:|
+| DeepLab+FEC（C） | 74 | 0.766086 | 0.710308 | +0.006982（+0.70 pp） | -0.008274（-0.83 pp） |
+| Gated+FEC（A+C） | 74 | 0.772246 | 0.717935 | +0.014609（+1.46 pp） | -0.000647（-0.06 pp） |
+
+逐类 Val IoU 的统一 FP32 复算：
+
+| 模型 | WR | Rille | Fault | Graben |
+|---|---:|---:|---:|---:|
+| Gated（A） | 0.763688 | 0.758272 | 0.595609 | 0.756727 |
+| FEC（C） | 0.762095 | 0.735767 | 0.583905 | 0.759391 |
+| Gated+FEC（A+C） | 0.759906 | 0.751541 | 0.595409 | 0.764742 |
+
+A+C 相对 A 为 WR -0.38 pp、Rille -0.67 pp、Fault -0.02 pp、Graben +0.80 pp。它没有改善设计时瞄准的 Fault，只把部分收益转移到 Graben，整体未超过 A。
+
+前景/背景二元混淆与边界指标：
+
+| 模型 | Background→Foreground FP | Foreground→Background FN | 容差2 px边界 F1 |
+|---|---:|---:|---:|
+| Gated（A） | 320,316 | 212,183 | 0.728015 |
+| FEC（C） | 354,564 | 196,195 | 0.705161 |
+| Gated+FEC（A+C） | 322,421 | 213,713 | 0.722651 |
+
+C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更多背景误报换取前景召回，而不是抑制假阳性。A+C 相对 A 同时增加2,105个 FP和1,530个 FN，容差2 px边界 F1下降0.54 pp。checkpoint 中二者学得的有界校准强度分别为 C 0.35843、A+C 0.22855，说明校准分支已参与决策，并非保持零初始化或完全关闭。
+
+训练曲线方面，C/A+C 最佳 epoch 的 Train−Val `mIoU_fg` gap 分别为9.16/8.96 pp，后20轮标准差为0.00162/0.00185，最终较峰值回落0.49/0.32 pp；属于与 A 相近的轻度过拟合和稳定波动，不能解释其方向性误差变化。前景辅助损失在最佳 epoch 的加权贡献分别约0.00833/0.00922，没有压过语义主损失。
+
+结论：FEC 登记为**单种子、小幅正收益候选模块C**，但现有 A+C 没有组合增益且未实现预期的总体假阳性抑制。当前总体架构仍保留 A，淘汰现有 A+C；不得写成“FEC 提升最终模型”。不建议继续扫描 foreground weight，因为当前方向性证据显示问题不只是损失权重，而是二元证据在联合语义优化下形成了召回—精度重新分配。
+
 ## 5. 当前可支持的模型结论
 
 1. 统一选模重跑的 DeepLabV3+-ResNet50 是当前主基线：Test `mIoU_fg=0.6942`（证据 B，待补下载产物）。
@@ -315,6 +350,7 @@ CMCR 单独相对 A 表现为更高召回、更多背景假阳性；组合相对
 6. Gated 无边界辅助损失在 physical batch4、seed42 上取得 Val `mIoU_fg=0.718582`，相对同为 batch4 的旧 DeepLab 峰值提升 1.53 pp，登记为单种子有效候选模块1；尚未完成多种子和最终冻结 Test，不能称为稳定增益。
 7. CMCR 单独取得 Val `mIoU_fg=0.709767`，相对旧 DeepLab batch4 提升0.64 pp，登记为单种子、小幅正收益候选模块2。
 8. Gated+CMCR 仅为0.708320，较 Gated 下降1.03 pp，并同时增加前景 FP 与 FN；现有联合结构淘汰，当前最佳总体模型仍是 Gated。
+9. FEC 单独取得 Val `mIoU_fg=0.710308`，相对旧 DeepLab batch4提升0.70 pp；但 Gated+FEC 为0.717935，较 Gated低0.06 pp，且没有改善 Fault 或总体假阳性，因此现有 A+C 淘汰。
 
 ## 6. 证据路径与缺失项
 
@@ -330,6 +366,8 @@ CMCR 单独相对 A 表现为更高召回、更多背景假阳性；组合相对
 - CMCR 单独：`results/v6_overlap40/CMCR/`
 - Gated+CMCR：`results/v6_overlap40/gate+CMCR/`
 - 统一 Val 诊断（含混淆矩阵、边界指标和错误图）：`results/v6_overlap40/val_diagnostics/{gated_without_boundary_loss_batch4,CMCR,gate+CMCR}/`
+- FEC 两项产物（目录名放反，以内部模型字段为准）：`results/v6_overlap40/{FEC,gate+FEC}/`
+- FEC 统一 Val 诊断：`results/v6_overlap40/val_diagnostics/{deeplab_fec,gated_fec}/`
 - 数据协议审计：`results/data_audit_v6_random_overlap40/`
 
 ### 6.2 仅有旧文档记录、待补原始产物
