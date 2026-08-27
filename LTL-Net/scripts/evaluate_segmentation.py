@@ -41,10 +41,11 @@ MODULE_MODEL_NAMES = {
     "gated_boundary",
     "gated_cmcr",
     "gated_fec",
+    "gated_rezero",
     "stdl_swinv2_small",
     "stdl_swinv2_base",
 }
-GATED_MODEL_NAMES = {"gated_boundary", "gated_cmcr", "gated_fec"}
+GATED_MODEL_NAMES = {"gated_boundary", "gated_cmcr", "gated_fec", "gated_rezero"}
 LABEL_CMAP = ListedColormap(["#111111", "#f4d03f", "#2e86de", "#e74c3c", "#af7ac5"])
 ERROR_CMAP = ListedColormap(["#111111", "#e74c3c", "#3498db", "#f1c40f"])
 

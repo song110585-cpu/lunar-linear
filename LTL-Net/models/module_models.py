@@ -94,6 +94,7 @@ class SemanticGatedBoundaryRefinement(nn.Module):
         detail_channels: int = 64,
         semantic_channels: int = 256,
         shape_channels: int = 32,
+        residual_scale_init: float | None = None,
     ) -> None:
         super().__init__()
         self.detail_projection = _conv_norm_relu(detail_channels, shape_channels, 3)
@@ -118,6 +119,11 @@ class SemanticGatedBoundaryRefinement(nn.Module):
             nn.BatchNorm2d(semantic_channels),
             nn.ReLU(inplace=True),
         )
+        self.residual_scale = (
+            nn.Parameter(torch.tensor(float(residual_scale_init)))
+            if residual_scale_init is not None
+            else None
+        )
 
     def forward(
         self, detail: torch.Tensor, semantic: torch.Tensor
@@ -133,7 +139,10 @@ class SemanticGatedBoundaryRefinement(nn.Module):
         shape = self.shape_refinement(detail * gate)
         boundary_logits = self.boundary_head(shape)
         shape_low = F.interpolate(shape, size=semantic.shape[-2:], mode="area")
-        refined = semantic + self.semantic_fusion(torch.cat((semantic, shape_low), dim=1))
+        residual = self.semantic_fusion(torch.cat((semantic, shape_low), dim=1))
+        if self.residual_scale is not None:
+            residual = torch.tanh(self.residual_scale) * residual
+        refined = semantic + residual
         return refined, boundary_logits
 
 
@@ -152,6 +161,42 @@ class GatedBoundaryResNet50(_DeepLabResNet50Base):
             semantic_channels=256,
             shape_channels=shape_channels,
         )
+
+    def forward_with_aux(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        features, decoded = self._features(x)
+        refined, boundary_logits = self.boundary_refinement(features[1], decoded)
+        return {
+            "logits": self.segmentation_head(refined),
+            "boundary_logits": boundary_logits,
+        }
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward_with_aux(x)["logits"]
+
+
+class GatedReZeroResNet50(_DeepLabResNet50Base):
+    """Gated detail fusion whose residual starts as the exact DeepLab identity."""
+
+    def __init__(
+        self,
+        encoder_weights: str | None = "imagenet",
+        classes: int = 5,
+        shape_channels: int = 32,
+    ) -> None:
+        super().__init__(encoder_weights=encoder_weights, classes=classes)
+        self.boundary_refinement = SemanticGatedBoundaryRefinement(
+            detail_channels=self.encoder.out_channels[1],
+            semantic_channels=256,
+            shape_channels=shape_channels,
+            residual_scale_init=0.0,
+        )
+        self.experiment_identity = {
+            "architecture": "GatedReZeroResNet50",
+            "backbone": "resnet50",
+            "residual_formula": "semantic + tanh(alpha) * gated_residual",
+            "residual_scale_init": 0.0,
+            "boundary_weight": 0.0,
+        }
 
     def forward_with_aux(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         features, decoded = self._features(x)
@@ -351,6 +396,8 @@ def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> n
         return DSConvResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_boundary", "gated_boundary_resnet50"}:
         return GatedBoundaryResNet50(encoder_weights=encoder_weights)
+    if normalized in {"gated_rezero", "gated_rezero_resnet50"}:
+        return GatedReZeroResNet50(encoder_weights=encoder_weights)
     if normalized in {"deeplab_cmcr", "deeplab_cmcr_resnet50"}:
         return DeepLabCMCRResNet50(encoder_weights=encoder_weights)
     if normalized in {"deeplab_fec", "deeplab_fec_resnet50"}:

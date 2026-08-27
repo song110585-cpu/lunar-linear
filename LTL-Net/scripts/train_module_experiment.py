@@ -44,7 +44,7 @@ DATA_METADATA_FILES = (
     "normalization_stats.json",
     "tile_manifest.csv",
 )
-GATED_MODULE_NAMES = {"gated_boundary", "gated_cmcr"}
+GATED_MODULE_NAMES = {"gated_boundary", "gated_cmcr", "gated_rezero"}
 FEC_MODULE_NAMES = {"deeplab_fec", "gated_fec"}
 BOUNDARY_MODULE_NAMES = GATED_MODULE_NAMES | {"gated_fec"}
 
@@ -477,6 +477,7 @@ def parse_args() -> argparse.Namespace:
             "gated_boundary",
             "gated_cmcr",
             "gated_fec",
+            "gated_rezero",
             "stdl_swinv2_small",
             "stdl_swinv2_base",
         ),

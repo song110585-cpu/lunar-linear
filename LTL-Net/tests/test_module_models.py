@@ -22,6 +22,7 @@ from models.module_models import (
     GatedBoundaryResNet50,
     GatedCMCRResNet50,
     GatedFECResNet50,
+    GatedReZeroResNet50,
     build_module_model,
 )
 from train_module_experiment import (
@@ -426,6 +427,62 @@ def test_stdl_swin_small_identity_without_pretraining():
     assert identity["pretrained"] is False
     assert model.backbone.patch_embed.proj.in_channels == 5
     assert all(parameter.requires_grad for parameter in model.parameters())
+
+
+def test_gated_rezero_starts_as_exact_deeplab_output():
+    torch.manual_seed(11)
+    model = GatedReZeroResNet50(encoder_weights=None).eval()
+    inputs = torch.randn(2, 5, 64, 64)
+    with torch.no_grad():
+        _, decoded = model._features(inputs)
+        expected = model.segmentation_head(decoded)
+        outputs = model.forward_with_aux(inputs)
+    assert model.boundary_refinement.residual_scale.item() == 0.0
+    assert torch.equal(outputs["logits"], expected)
+    assert outputs["boundary_logits"].shape[0] == inputs.shape[0]
+    assert model.experiment_identity["residual_scale_init"] == 0.0
+
+
+def test_gated_rezero_seed_configs_change_only_seed_identity():
+    config_dir = PROJECT_ROOT / "configs"
+    names = (
+        "v6_overlap40_gated_rezero_batch4_seed42.json",
+        "v6_overlap40_gated_rezero_batch4_seed1337.json",
+    )
+    seed42, seed1337 = [
+        json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names
+    ]
+    allowed_differences = {
+        "experiment",
+        "hypothesis",
+        "unique_variable",
+        "seed",
+        "run_name",
+    }
+    assert set(seed42) == set(seed1337)
+    for key in seed42:
+        if key not in allowed_differences:
+            assert seed42[key] == seed1337[key], key
+    assert [seed42["seed"], seed1337["seed"]] == [42, 1337]
+    assert seed42["module"] == seed1337["module"] == "gated_rezero"
+    assert seed42["residual_scale_init"] == seed1337["residual_scale_init"] == 0.0
+    assert seed42["automatic_test_evaluation"] is False
+    assert seed1337["automatic_test_evaluation"] is False
+
+
+def test_gated_rezero_scale_can_leave_identity_after_backward():
+    torch.manual_seed(17)
+    model = GatedReZeroResNet50(encoder_weights=None).train()
+    inputs = torch.randn(2, 5, 64, 64)
+    labels = torch.randint(0, 5, (2, 64, 64))
+    outputs = model.forward_with_aux(inputs)
+    criterion = ExperimentLoss("gated_rezero", boundary_weight=0.0)
+    loss, _ = criterion(outputs["logits"], labels, outputs["boundary_logits"])
+    loss.backward()
+    gradient = model.boundary_refinement.residual_scale.grad
+    assert gradient is not None
+    assert torch.isfinite(gradient)
+    assert gradient.abs().item() > 0.0
 
 
 def test_fec_configs_share_the_controlled_batch4_protocol():
