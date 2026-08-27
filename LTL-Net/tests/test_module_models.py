@@ -361,6 +361,30 @@ def test_full_pipeline_seed1337_frozen_config_binds_new_parent():
     assert config["automatic_test_evaluation"] is False
 
 
+def test_deeplab_and_gated_seed1337_are_structure_only_controls():
+    config_dir = PROJECT_ROOT / "configs"
+    names = (
+        "v6_overlap40_deeplab_batch4_seed1337.json",
+        "v6_overlap40_gated_no_boundary_batch4_seed1337.json",
+    )
+    configs = [json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names]
+    assert set(configs[0]) == set(configs[1])
+    assert [config["module"] for config in configs] == ["deeplab", "gated_boundary"]
+    controlled_fields = {
+        "experiment",
+        "hypothesis",
+        "unique_variable",
+        "module",
+        "run_name",
+    }
+    for key in configs[0]:
+        if key not in controlled_fields:
+            assert configs[0][key] == configs[1][key], key
+    assert all(config["seed"] == 1337 for config in configs)
+    assert all(config["batch_size"] == 4 and config["accum_steps"] == 1 for config in configs)
+    assert all(config["automatic_test_evaluation"] is False for config in configs)
+
+
 def test_fec_configs_share_the_controlled_batch4_protocol():
     config_dir = PROJECT_ROOT / "configs"
     names = (
