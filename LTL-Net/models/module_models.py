@@ -337,6 +337,14 @@ class GatedFECResNet50(GatedBoundaryResNet50):
 
 def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> nn.Module:
     normalized = name.strip().lower().replace("-", "_")
+    if normalized in {"stdl_swinv2_small", "stdl_swin_small"}:
+        from .stdl_swin_adapter import build_stdl_swinv2
+
+        return build_stdl_swinv2("small", encoder_weights=encoder_weights)
+    if normalized in {"stdl_swinv2_base", "stdl_swin_base"}:
+        from .stdl_swin_adapter import build_stdl_swinv2
+
+        return build_stdl_swinv2("base", encoder_weights=encoder_weights)
     if normalized in {"deeplab", "deeplabv3plus", "deeplab_resnet50"}:
         return DeepLabResNet50(encoder_weights=encoder_weights)
     if normalized in {"dsconv", "dsconv_resnet50"}:

@@ -22,6 +22,7 @@ from models.module_models import (
     GatedBoundaryResNet50,
     GatedCMCRResNet50,
     GatedFECResNet50,
+    build_module_model,
 )
 from train_module_experiment import (
     DATA_METADATA_FILES,
@@ -383,6 +384,48 @@ def test_deeplab_and_gated_seed1337_are_structure_only_controls():
     assert all(config["seed"] == 1337 for config in configs)
     assert all(config["batch_size"] == 4 and config["accum_steps"] == 1 for config in configs)
     assert all(config["automatic_test_evaluation"] is False for config in configs)
+
+
+def test_stdl_swin_configs_differ_only_by_capacity_identity():
+    config_dir = PROJECT_ROOT / "configs"
+    names = (
+        "v6_overlap40_stdl_swinv2_small_full_seed42.json",
+        "v6_overlap40_stdl_swinv2_base_full_seed42.json",
+    )
+    small, base = [
+        json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names
+    ]
+    allowed_differences = {
+        "experiment",
+        "hypothesis",
+        "comparison_scope",
+        "module",
+        "encoder",
+        "pretrain_filename",
+        "expected_pretrain_sha256",
+        "run_name",
+    }
+    assert set(small) == set(base)
+    for key in small:
+        if key not in allowed_differences:
+            assert small[key] == base[key], key
+    assert small["module"] == "stdl_swinv2_small"
+    assert base["module"] == "stdl_swinv2_base"
+    assert small["freeze_stages"] == base["freeze_stages"] == 0
+    assert small["automatic_test_evaluation"] is False
+    assert base["automatic_test_evaluation"] is False
+
+
+def test_stdl_swin_small_identity_without_pretraining():
+    model = build_module_model("stdl_swinv2_small", encoder_weights=None)
+    identity = model.experiment_identity
+    assert identity["variant"] == "small"
+    assert identity["backbone"] == "swinv2_small"
+    assert identity["freeze_stages"] == 0
+    assert identity["in_channels"] == 5
+    assert identity["pretrained"] is False
+    assert model.backbone.patch_embed.proj.in_channels == 5
+    assert all(parameter.requires_grad for parameter in model.parameters())
 
 
 def test_fec_configs_share_the_controlled_batch4_protocol():

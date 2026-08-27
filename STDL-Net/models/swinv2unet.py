@@ -1,4 +1,5 @@
 from re import X
+import hashlib
 import os
 import torch,timm
 import torch.nn as nn
@@ -846,6 +847,14 @@ _SWIN_V2_PRETRAINED = {
 }
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _find_pretrained(variant):
     """自动查找预训练权重, 兼容本地 / Kaggle / 任意环境.
     优先: 环境变量 SWIN_PRETRAIN_DIR > 脚本目录 > pretrain/ 子目录 > 递归搜索
@@ -906,8 +915,11 @@ def swin_v2_LCSRB(img_size=512, in_chans=3, size='base', **kwargs):
         **kwargs
     )
     # 加载预训练的权重
+    pretrained_path = None
+    pretrained_sha256 = None
     if pretrained:
         pretrained_path = _find_pretrained(variant)
+        pretrained_sha256 = _sha256_file(pretrained_path)
         checkpoint = torch.load(pretrained_path, map_location='cpu')
         if "model" in checkpoint:
             checkpoint = checkpoint["model"]
@@ -963,6 +975,17 @@ def swin_v2_LCSRB(img_size=512, in_chans=3, size='base', **kwargs):
         new_dict[new_key] = v
     # 将新字典中的权重加载到模型中，允许部分不匹配
     model.load_state_dict(new_dict, strict=False)
+    model.pretrained_load_report = {
+        'variant': variant,
+        'source': pretrained_path,
+        'source_sha256': pretrained_sha256,
+        'checkpoint_tensor_count': len(checkpoint),
+        'matched_tensor_count': len(new_dict),
+        'matched_parameter_count': int(sum(v.numel() for v in new_dict.values())),
+        'model_tensor_count': len(model_dict),
+    }
+    if pretrained and not new_dict:
+        raise RuntimeError(f'no pretrained tensors matched SwinV2-{variant}')
 
     return model        # 返回模型实例
 
@@ -2357,7 +2380,3 @@ if __name__=="__main__":
     out = model(inp.cuda())
     # 打印输出的形状，以便检查模型的输出是否符合预期。
     print(out.shape)
-
-
-
-    

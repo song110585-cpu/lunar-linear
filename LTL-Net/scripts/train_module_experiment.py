@@ -267,6 +267,18 @@ def train(args: argparse.Namespace) -> dict:
 
     encoder_weights = None if args.encoder_weights.lower() == "none" else args.encoder_weights
     model = build_module_model(args.module, encoder_weights=encoder_weights).to(device)
+    model_identity = getattr(model, "experiment_identity", None)
+    if args.expected_pretrain_sha256:
+        actual_pretrain_sha256 = (
+            (model_identity or {})
+            .get("pretrained_load_report", {})
+            .get("source_sha256")
+        )
+        if actual_pretrain_sha256 != args.expected_pretrain_sha256:
+            raise RuntimeError(
+                "pretrained checkpoint SHA-256 mismatch: "
+                f"actual={actual_pretrain_sha256}, expected={args.expected_pretrain_sha256}"
+            )
     load_report = None
     init_checkpoint_sha256 = None
     if args.freeze_base:
@@ -297,6 +309,7 @@ def train(args: argparse.Namespace) -> dict:
         trainable_parameter_count=sum(p.numel() for p in trainable_parameters),
         init_checkpoint_sha256=init_checkpoint_sha256,
         checkpoint_load_report=load_report,
+        model_identity=model_identity,
         class_weights=CLASS_WEIGHTS,
         selection_metric="val_mIoU_fg",
         automatic_test_evaluation=False,
@@ -427,7 +440,9 @@ def train(args: argparse.Namespace) -> dict:
         commit = "unknown"
     result = {
         "model": args.module,
-        "encoder": "resnet50",
+        "encoder": (
+            model_identity["backbone"] if model_identity else "resnet50"
+        ),
         "seed": args.seed,
         "epochs": args.epochs,
         "epochs_completed": len(history),
@@ -462,6 +477,8 @@ def parse_args() -> argparse.Namespace:
             "gated_boundary",
             "gated_cmcr",
             "gated_fec",
+            "stdl_swinv2_small",
+            "stdl_swinv2_base",
         ),
     )
     parser.add_argument("--data-dir", required=True)
@@ -477,6 +494,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--boundary-weight", type=float, default=0.2)
     parser.add_argument("--foreground-weight", type=float, default=0.1)
     parser.add_argument("--encoder-weights", default="imagenet")
+    parser.add_argument("--expected-pretrain-sha256", default="")
     parser.add_argument("--init-checkpoint", default="")
     parser.add_argument("--freeze-base", action="store_true")
     parser.add_argument("--early-stopping-patience", type=int, default=0)
