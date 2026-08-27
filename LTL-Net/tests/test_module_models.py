@@ -341,6 +341,26 @@ def test_frozen_cmcr_config_has_epoch_zero_guard_protocol():
             assert all(config[key] == configs[0][key] for config in configs[1:]), key
 
 
+def test_full_pipeline_seed1337_frozen_config_binds_new_parent():
+    config = json.loads(
+        (
+            PROJECT_ROOT
+            / "configs"
+            / "v6_overlap40_frozen_gatedA1337_cmcr_batch4_seed1337.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert config["module"] == "gated_cmcr"
+    assert config["seed"] == 1337
+    assert config["freeze_base"] is True
+    assert config["batch_size"] == 4 and config["accum_steps"] == 1
+    assert config["early_stopping_patience"] == 8
+    assert config["expected_init_checkpoint_sha256"] == (
+        "0d0bca4e7358e959efe0d09fab88c43b1a9f651ef5861f3c4a385ab7168a43e3"
+    )
+    assert "gatedA1337" in config["run_name"]
+    assert config["automatic_test_evaluation"] is False
+
+
 def test_fec_configs_share_the_controlled_batch4_protocol():
     config_dir = PROJECT_ROOT / "configs"
     names = (

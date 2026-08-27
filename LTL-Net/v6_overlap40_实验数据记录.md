@@ -377,6 +377,22 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 
 结论：此前 A+B 从头联合训练较 A 下降1.03 pp，而冻结 A、仅训练 B 后三种子平均提升0.30 pp并稳定达到 Val `mIoU_fg>0.72`。这支持“CMCR 对固定 A 的条件增益稳定，主要问题是联合共适应冲突”，当前保留**两阶段 A→B**作为最佳总体架构候选；其训练规程必须作为方法的一部分明确报告，不能与从头联合 A+B 混写。这里的三种子只改变 B 阶段，尚不能替代从头重训不同 A 的完整流程复验；完成至少一次新 A→B 后再冻结架构并进行一次最终 Test。
 
+### 4.9 Gated A 的 seed1337 完整重训（2026-08-27）
+
+为验证 A 本身及完整 A→B 流程的种子稳定性，在 AutoDL RTX5090 环境从同一 SMP ResNet50 ImageNet 权重重新训练 Gated A：seed1337、80 epochs、physical batch4/accum1、学习率5e-5、`boundary_weight=0`、`val_mIoU_fg` 选模，不访问 Test；数据元文件 SHA 与 A42 完全一致，Git commit `0c4e557`。最佳 epoch 为71，最终80轮完整；checkpoint SHA-256 为 `0d0bca4e7358e959efe0d09fab88c43b1a9f651ef5861f3c4a385ab7168a43e3`，413个张量均无 NaN/Inf。
+
+统一 FP32 Val 诊断复算 `mIoU_fg=0.699900`，与训练保存值0.699946差0.0046 pp，确认下降不是日志或权重读取错误：
+
+| 模型 | Val mIoU_all | Val mIoU_fg | WR IoU | Rille IoU | Fault IoU | Graben IoU | 前景FP | 前景FN |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| A seed42 | 0.772771 | 0.718574 | 0.763688 | 0.758272 | 0.595609 | 0.756727 | 320,316 | 212,183 |
+| A seed1337 | 0.757700 | 0.699900 | 0.751184 | 0.728441 | 0.583927 | 0.736050 | 337,933 | 228,272 |
+| seed1337相对seed42 | -0.015070 | **-0.018673（-1.87 pp）** | -0.012505 | -0.029831 | -0.011682 | -0.020677 | +17,617 | +16,089 |
+
+四个前景类全部下降，且 FP/FN 同时增加；容差2 px边界 F1 从0.728015降至0.703082。最佳 epoch 的 Train−Val `mIoU_fg` gap 约10.46 pp，最终第80轮 Val 回落到0.697010；Val loss 在训练中后期上升而 Val mIoU 缓慢改善，说明加权 CE 与目标指标存在偏差并伴随明显过拟合。
+
+该对比同时改变了 seed 与运行环境（A42在 Kaggle，A1337在 AutoDL），不能把1.87 pp差值严格全部归因于随机种子；也缺少匹配的 DeepLab seed1337，暂时不能判断 A 在seed1337下相对骨干基线是否仍有增益。当前必须保留该结果，不得只报告更高的seed42。下一控制为加载并冻结此 A1337，仅训练 B1337；epoch0必须复现约0.69990，再判断 CMCR 条件增益是否跨 A checkpoint 保持。
+
 ## 5. 当前可支持的模型结论
 
 1. 统一选模重跑的 DeepLabV3+-ResNet50 是当前主基线：Test `mIoU_fg=0.6942`（证据 B，待补下载产物）。
@@ -389,6 +405,7 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 8. Gated+CMCR 仅为0.708320，较 Gated 下降1.03 pp，并同时增加前景 FP 与 FN；现有联合结构淘汰，当前最佳总体模型仍是 Gated。
 9. FEC 单独取得 Val `mIoU_fg=0.710308`，相对旧 DeepLab batch4提升0.70 pp；但 Gated+FEC 为0.717935，较 Gated低0.06 pp，且没有改善 Fault 或总体假阳性，因此现有 A+C 淘汰。
 10. 冻结已训练 Gated、仅训练 CMCR 的两阶段 A→B 在三个 CMCR 阶段种子上取得统一复算 Val `mIoU_fg=0.721578±0.000135`，较 A 平均提升0.30 pp，四个前景类别平均 IoU 均提高；可写成“对固定 A 的条件增益在三种子上稳定”，但尚不能写成完整模型或 Test 稳定增益。
+11. Gated A 的seed1337完整重训统一复算 Val `mIoU_fg=0.699900`，较seed42低1.87 pp且四类、FP/FN和边界指标均退化；A存在显著种子/环境敏感性，需完成 A1337→B1337 和匹配的 DeepLab seed1337 后再解释模块稳定性。
 
 ## 6. 证据路径与缺失项
 
@@ -410,6 +427,8 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 - 冻结 A→B 统一 Val 诊断：`results/v6_overlap40/gated_cmcr_resnet50_frozen_gated_seed42_batch4/val_diagnostics/`
 - 冻结 A→B 的 seed1337/3407：`results/v6_overlap40/gated_cmcr_resnet50_frozen_gated_seed{1337,3407}_batch4/`
 - seed1337/3407 统一 Val 诊断：上述各目录的 `val_diagnostics/`
+- Gated A seed1337：`results/v6_overlap40/gated_boundary_resnet50_seed1337_bw0_batch4/`
+- Gated A seed1337 统一 Val 诊断：上述目录的 `val_diagnostics/`
 - 数据协议审计：`results/data_audit_v6_random_overlap40/`
 
 ### 6.2 仅有旧文档记录、待补原始产物
