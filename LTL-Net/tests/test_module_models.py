@@ -22,6 +22,7 @@ from models.module_models import (
     GatedBoundaryResNet50,
     GatedCMCRResNet50,
     GatedFECResNet50,
+    GatedReZeroCMCRResNet50,
     GatedReZeroResNet50,
     build_module_model,
 )
@@ -195,6 +196,10 @@ def test_flatten_evaluation_preserves_comparison_fields():
         "foreground_boundary_metrics": {
             "2": {"precision": 0.7, "recall": 0.8, "f1": 0.746},
         },
+        "gated_rezero_scale": {
+            "raw_alpha": -0.05,
+            "effective_tanh_alpha": -0.049958,
+        },
     }
     row = flatten_evaluation("control", payload)
     assert row["experiment"] == "control"
@@ -202,6 +207,8 @@ def test_flatten_evaluation_preserves_comparison_fields():
     assert row["iou_fault"] == 0.7
     assert row["foreground_fp"] == 2
     assert row["boundary_f1_t2"] == 0.746
+    assert row["rezero_raw_alpha"] == -0.05
+    assert row["rezero_effective_scale"] == -0.049958
 
 
 def test_tiff_integrity_check_reports_corrupt_file():
@@ -226,6 +233,15 @@ def test_single_model_folder_discovers_checkpoint_and_model_type():
         )
         assert discover_checkpoint(folder) == checkpoint
         assert discover_model_type(folder) == "gated_boundary"
+
+
+def test_single_model_folder_discovers_gated_rezero():
+    with tempfile.TemporaryDirectory() as directory:
+        folder = Path(directory)
+        (folder / "config.json").write_text(
+            json.dumps({"module": "gated_rezero"}), encoding="utf-8"
+        )
+        assert discover_model_type(folder) == "gated_rezero"
 
 
 def test_boundary_target_marks_foreground_transitions_only():
@@ -483,6 +499,71 @@ def test_gated_rezero_scale_can_leave_identity_after_backward():
     assert gradient is not None
     assert torch.isfinite(gradient)
     assert gradient.abs().item() > 0.0
+
+
+def test_gated_rezero_cmcr_starts_as_exact_rezero_parent():
+    torch.manual_seed(2026)
+    parent = GatedReZeroResNet50(encoder_weights=None).eval()
+    torch.manual_seed(2026)
+    enhanced = GatedReZeroCMCRResNet50(encoder_weights=None).eval()
+    inputs = torch.randn(1, 5, 64, 64)
+    with torch.no_grad():
+        parent_outputs = parent.forward_with_aux(inputs)
+        enhanced_outputs = enhanced.forward_with_aux(inputs)
+    assert torch.equal(parent_outputs["logits"], enhanced_outputs["logits"])
+    assert torch.equal(
+        parent_outputs["boundary_logits"], enhanced_outputs["boundary_logits"]
+    )
+    assert torch.count_nonzero(enhanced.cmcr.residual_head.weight) == 0
+
+
+def test_frozen_rezero_cmcr_loader_restores_matching_parent():
+    with tempfile.TemporaryDirectory() as directory:
+        checkpoint = Path(directory) / "gated_rezero.pth"
+        torch.manual_seed(2026)
+        parent = GatedReZeroResNet50(encoder_weights=None).eval()
+        torch.save(parent.state_dict(), checkpoint)
+        enhanced = GatedReZeroCMCRResNet50(encoder_weights=None).eval()
+        report = load_frozen_cmcr_base(
+            enhanced, str(checkpoint), torch.device("cpu")
+        )
+        assert report["missing_keys"]
+        assert all(key.startswith("cmcr.") for key in report["missing_keys"])
+        assert all(
+            parameter.requires_grad == name.startswith("cmcr.")
+            for name, parameter in enhanced.named_parameters()
+        )
+        assert torch.equal(
+            parent.boundary_refinement.residual_scale,
+            enhanced.boundary_refinement.residual_scale,
+        )
+
+
+def test_frozen_rezero_cmcr_configs_bind_each_parent_checkpoint():
+    config_dir = PROJECT_ROOT / "configs"
+    names = (
+        "v6_overlap40_frozen_gated_rezero_cmcr_batch4_seed42.json",
+        "v6_overlap40_frozen_gated_rezero_cmcr_batch4_seed1337.json",
+    )
+    seed42, seed1337 = [
+        json.loads((config_dir / name).read_text(encoding="utf-8")) for name in names
+    ]
+    assert [seed42["seed"], seed1337["seed"]] == [42, 1337]
+    assert seed42["module"] == seed1337["module"] == "gated_rezero_cmcr"
+    assert seed42["expected_init_checkpoint_sha256"] == (
+        "d6fd9b1a940d707ff64fe05383e9326420a7a586acf0182cb38c7f5a776b0ed4"
+    )
+    assert seed1337["expected_init_checkpoint_sha256"] == (
+        "a95ac00c09aac49e5d82fc0d84195da32c7f02076cecb52d5146dfe3e691f887"
+    )
+    for config in (seed42, seed1337):
+        assert config["freeze_base"] is True
+        assert config["epochs"] == 40
+        assert config["early_stopping_patience"] == 8
+        assert config["batch_size"] == 4 and config["accum_steps"] == 1
+        assert config["boundary_weight"] == 0.0
+        assert config["selection_metric"] == "val_mIoU_fg"
+        assert config["automatic_test_evaluation"] is False
 
 
 def test_fec_configs_share_the_controlled_batch4_protocol():

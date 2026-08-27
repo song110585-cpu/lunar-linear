@@ -355,6 +355,39 @@ class GatedCMCRResNet50(GatedBoundaryResNet50):
         return outputs
 
 
+class GatedReZeroCMCRResNet50(GatedReZeroResNet50):
+    """Frozen-compatible ReZero gated parent plus zero-init CMCR correction."""
+
+    def __init__(
+        self,
+        encoder_weights: str | None = "imagenet",
+        classes: int = 5,
+        shape_channels: int = 32,
+        cmcr_channels: int = 32,
+    ) -> None:
+        super().__init__(
+            encoder_weights=encoder_weights,
+            classes=classes,
+            shape_channels=shape_channels,
+        )
+        self.cmcr = CrossModalConsistencyResidual(
+            feature_channels=cmcr_channels, classes=classes
+        )
+        self.experiment_identity = {
+            **self.experiment_identity,
+            "architecture": "GatedReZeroCMCRResNet50",
+            "cmcr_residual_init": 0.0,
+            "training_regime": "freeze_gated_rezero_then_train_cmcr",
+        }
+
+    def forward_with_aux(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        outputs = super().forward_with_aux(x)
+        outputs["logits"] = outputs["logits"] + self.cmcr(
+            x, outputs["logits"].shape[-2:]
+        )
+        return outputs
+
+
 class GatedFECResNet50(GatedBoundaryResNet50):
     """Validated semantic-gated fusion plus foreground-evidence calibration."""
 
@@ -404,6 +437,8 @@ def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> n
         return DeepLabFECResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_cmcr", "gated_cmcr_resnet50"}:
         return GatedCMCRResNet50(encoder_weights=encoder_weights)
+    if normalized in {"gated_rezero_cmcr", "gated_rezero_cmcr_resnet50"}:
+        return GatedReZeroCMCRResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_fec", "gated_fec_resnet50"}:
         return GatedFECResNet50(encoder_weights=encoder_weights)
     raise ValueError(f"unknown module model: {name}")

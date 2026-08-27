@@ -42,10 +42,17 @@ MODULE_MODEL_NAMES = {
     "gated_cmcr",
     "gated_fec",
     "gated_rezero",
+    "gated_rezero_cmcr",
     "stdl_swinv2_small",
     "stdl_swinv2_base",
 }
-GATED_MODEL_NAMES = {"gated_boundary", "gated_cmcr", "gated_fec", "gated_rezero"}
+GATED_MODEL_NAMES = {
+    "gated_boundary",
+    "gated_cmcr",
+    "gated_fec",
+    "gated_rezero",
+    "gated_rezero_cmcr",
+}
 LABEL_CMAP = ListedColormap(["#111111", "#f4d03f", "#2e86de", "#e74c3c", "#af7ac5"])
 ERROR_CMAP = ListedColormap(["#111111", "#e74c3c", "#3498db", "#f1c40f"])
 
@@ -355,7 +362,7 @@ def main():
     normalized_model = args.model.lower().replace("-", "_")
     if normalized_model in GATED_MODEL_NAMES:
         register_gate_hook(model.boundary_refinement.gate, gate_stats)
-    if normalized_model in {"deeplab_cmcr", "gated_cmcr"}:
+    if normalized_model in {"deeplab_cmcr", "gated_cmcr", "gated_rezero_cmcr"}:
         register_gate_hook(model.cmcr.consistency_gate, cmcr_gate_stats)
     losses = []
     rows = []
@@ -462,6 +469,15 @@ def main():
             "std": variance ** 0.5,
             "fraction_below_0_05": cmcr_gate_stats["low"] / cmcr_gate_stats["count"],
             "fraction_above_0_95": cmcr_gate_stats["high"] / cmcr_gate_stats["count"],
+        }
+    residual_scale = getattr(
+        getattr(model, "boundary_refinement", None), "residual_scale", None
+    )
+    if residual_scale is not None:
+        raw_scale = float(residual_scale.detach().cpu())
+        payload["gated_rezero_scale"] = {
+            "raw_alpha": raw_scale,
+            "effective_tanh_alpha": float(np.tanh(raw_scale)),
         }
     (output_dir / "evaluation_metrics.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"

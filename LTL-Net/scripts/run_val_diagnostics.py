@@ -82,6 +82,8 @@ def parse_args() -> argparse.Namespace:
             "gated_boundary",
             "gated_cmcr",
             "gated_fec",
+            "gated_rezero",
+            "gated_rezero_cmcr",
         ),
         help="通常由 config.json/metrics.json 自动识别",
     )
@@ -143,6 +145,8 @@ def discover_model_type(model_folder: Path) -> str:
         "gated_boundary": "gated_boundary",
         "gated_cmcr": "gated_cmcr",
         "gated_fec": "gated_fec",
+        "gated_rezero": "gated_rezero",
+        "gated_rezero_cmcr": "gated_rezero_cmcr",
     }
     for filename in ("config.json", "metrics.json"):
         path = model_folder / filename
@@ -268,6 +272,11 @@ def flatten_evaluation(name: str, payload: dict) -> dict:
     if "cmcr_gate_activation" in payload:
         row["cmcr_gate_mean"] = payload["cmcr_gate_activation"]["mean"]
         row["cmcr_gate_std"] = payload["cmcr_gate_activation"]["std"]
+    if "gated_rezero_scale" in payload:
+        row["rezero_raw_alpha"] = payload["gated_rezero_scale"]["raw_alpha"]
+        row["rezero_effective_scale"] = payload["gated_rezero_scale"][
+            "effective_tanh_alpha"
+        ]
     return row
 
 

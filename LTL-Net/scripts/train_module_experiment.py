@@ -44,7 +44,12 @@ DATA_METADATA_FILES = (
     "normalization_stats.json",
     "tile_manifest.csv",
 )
-GATED_MODULE_NAMES = {"gated_boundary", "gated_cmcr", "gated_rezero"}
+GATED_MODULE_NAMES = {
+    "gated_boundary",
+    "gated_cmcr",
+    "gated_rezero",
+    "gated_rezero_cmcr",
+}
 FEC_MODULE_NAMES = {"deeplab_fec", "gated_fec"}
 BOUNDARY_MODULE_NAMES = GATED_MODULE_NAMES | {"gated_fec"}
 
@@ -478,6 +483,7 @@ def parse_args() -> argparse.Namespace:
             "gated_cmcr",
             "gated_fec",
             "gated_rezero",
+            "gated_rezero_cmcr",
             "stdl_swinv2_small",
             "stdl_swinv2_base",
         ),
@@ -508,8 +514,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("foreground-weight must be non-negative")
     if args.early_stopping_patience < 0:
         parser.error("early-stopping-patience must be non-negative")
-    if args.freeze_base and args.module != "gated_cmcr":
-        parser.error("freeze-base currently requires --module gated_cmcr")
+    if args.freeze_base and args.module not in {"gated_cmcr", "gated_rezero_cmcr"}:
+        parser.error(
+            "freeze-base requires --module gated_cmcr or gated_rezero_cmcr"
+        )
     if args.freeze_base and not args.init_checkpoint:
         parser.error("freeze-base requires --init-checkpoint")
     if args.freeze_base and not Path(args.init_checkpoint).is_file():

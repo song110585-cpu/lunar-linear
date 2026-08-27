@@ -393,6 +393,24 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 
 该对比同时改变了 seed 与运行环境（A42在 Kaggle，A1337在 AutoDL），不能把1.87 pp差值严格全部归因于随机种子；也缺少匹配的 DeepLab seed1337，暂时不能判断 A 在seed1337下相对骨干基线是否仍有增益。当前必须保留该结果，不得只报告更高的seed42。下一控制为加载并冻结此 A1337，仅训练 B1337；epoch0必须复现约0.69990，再判断 CMCR 条件增益是否跨 A checkpoint 保持。
 
+### 4.10 Gated-ReZero（A′）双种子完整重训（2026-08-27）
+
+针对原 Gated A 的种子敏感性，将语义回融改为 `semantic + tanh(alpha) × gated_residual`，并将可学习标量 `alpha` 初始化为0，使模型在训练起点严格等价于 DeepLab。两次运行均为 overlap40、ResNet50、80 epochs、physical batch4/accum1、学习率5e-5、`boundary_weight=0`、`val_mIoU_fg` 选模，不访问 Test，Git commit `3aeed74`。seed42/1337 checkpoint SHA-256 分别为 `d6fd9b1a940d707ff64fe05383e9326420a7a586acf0182cb38c7f5a776b0ed4` 和 `a95ac00c09aac49e5d82fc0d84195da32c7f02076cecb52d5146dfe3e691f887`；各414个张量均无 NaN/Inf。
+
+统一 FP32 Val 诊断与保存值一致：
+
+| 模型/seed | 最佳 epoch | Val mIoU_all | Val mIoU_fg | WR | Rille | Fault | Graben | 前景FP | 前景FN | 边界F1@2px |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A′ seed42 | 79 | 0.765226 | 0.709249 | 0.753691 | 0.733389 | 0.591699 | 0.758215 | 343,184 | 210,696 | 0.704297 |
+| A′ seed1337 | 78 | 0.768594 | 0.713449 | 0.749267 | 0.746632 | 0.597989 | 0.759910 | 333,634 | 218,587 | 0.717342 |
+| **均值±样本标准差** | — | — | **0.711349±0.002970** | 0.751479 | 0.740011 | 0.594844 | 0.759062 | 338,409 | 214,642 | 0.710819 |
+
+按现有匹配seed基线比较，A′ seed42相对旧 DeepLab batch4（0.703326）提高0.59 pp，A′ seed1337相对 DeepLab1337（0.705760）提高0.77 pp；两种子平均增益约0.68 pp，方向一致。原A的seed42/1337统一复算为0.718574/0.699900，极差1.87 pp；A′极差降至0.42 pp，且均值由0.709237升至0.711349。A′牺牲了原A的seed42高峰，却恢复了seed1337，并获得更高双种子均值，因此应替代原A作为模块1候选。受限于只有两个端到端种子，表述应为“双种子正收益且波动明显降低”，不写成充分统计证明。
+
+两次最佳epoch的 Train−Val `mIoU_fg` gap 分别为9.11/9.20 pp，后20轮Val标准差为0.00182/0.00124；A′没有消除一般过拟合，但降低了最终指标对初始化的敏感性。最佳checkpoint中的 `alpha` 分别为-0.05340/-0.05989（对应小幅负向有界残差），证明分支已离开恒等初始化且两个种子学习方向一致。A′平均边界F1@2px略低于原A双种子平均值，主要收益不是边界精度全面提高，而是更稳定的语义分割权衡。
+
+下一严格控制为分别冻结 A′42 和 A′1337，只训练零初始化 CMCR；两个实验必须绑定各自父checkpoint哈希，epoch0分别复现0.709249和0.713449。只有CMCR在两个不同A′父模型上均取得正增益，才将两阶段 A′→B 登记为最终总体架构。
+
 ## 5. 当前可支持的模型结论
 
 1. 统一选模重跑的 DeepLabV3+-ResNet50 是当前主基线：Test `mIoU_fg=0.6942`（证据 B，待补下载产物）。
@@ -400,12 +418,13 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 3. U-Net 的 Test `mIoU_fg=0.6824`，低于统一 DeepLab 约 1.18 pp；但 Rille IoU 0.7458，显示结构存在类别偏好。
 4. D-LinkNet-R50 adapted 的 Test `mIoU_fg=0.6030`，比统一 DeepLab 低 9.12 pp；由于其约 1.80 亿参数、物理 batch=2 且是 R50 适配版，只能说明当前适配和配置较差，不能推断原始 D-LinkNet 方法普遍较差。
 5. DSConv 与旧 Gated Boundary 的 batch2 配置不进入总体架构；同物理 batch2 控制证明二者的旧结果受到严重 batch/BN 混杂，不能作为模块思想无效的证据。
-6. Gated 无边界辅助损失在 physical batch4、seed42 上取得 Val `mIoU_fg=0.718582`，相对同为 batch4 的旧 DeepLab 峰值提升 1.53 pp，登记为单种子有效候选模块1；尚未完成多种子和最终冻结 Test，不能称为稳定增益。
+6. 原 Gated A 在seed42上达到0.718582，但seed1337降至统一复算0.699900，存在明显种子/环境敏感性；其零初始化改进 A′ 在seed42/1337上统一复算为0.709249/0.713449，相对各自DeepLab均为正收益，双种子均值0.711349、极差0.42 pp。A′替代原A成为当前模块1候选，但两种子仍不足以宣称充分统计稳定性。
 7. CMCR 单独取得 Val `mIoU_fg=0.709767`，相对旧 DeepLab batch4 提升0.64 pp，登记为单种子、小幅正收益候选模块2。
 8. Gated+CMCR 仅为0.708320，较 Gated 下降1.03 pp，并同时增加前景 FP 与 FN；现有联合结构淘汰，当前最佳总体模型仍是 Gated。
 9. FEC 单独取得 Val `mIoU_fg=0.710308`，相对旧 DeepLab batch4提升0.70 pp；但 Gated+FEC 为0.717935，较 Gated低0.06 pp，且没有改善 Fault 或总体假阳性，因此现有 A+C 淘汰。
 10. 冻结已训练 Gated、仅训练 CMCR 的两阶段 A→B 在三个 CMCR 阶段种子上取得统一复算 Val `mIoU_fg=0.721578±0.000135`，较 A 平均提升0.30 pp，四个前景类别平均 IoU 均提高；可写成“对固定 A 的条件增益在三种子上稳定”，但尚不能写成完整模型或 Test 稳定增益。
-11. Gated A 的seed1337完整重训统一复算 Val `mIoU_fg=0.699900`，较seed42低1.87 pp且四类、FP/FN和边界指标均退化；A存在显著种子/环境敏感性，需完成 A1337→B1337 和匹配的 DeepLab seed1337 后再解释模块稳定性。
+11. Gated A 的seed1337完整重训统一复算 Val `mIoU_fg=0.699900`，较seed42低1.87 pp；该负结果已保留，并直接推动了A′的零初始化设计，不能从论文记录中删除。
+12. 下一步仅运行两个冻结控制：A′42→CMCR42与A′1337→CMCR1337。旧A→B的三种子结果只能证明B对固定旧A的条件增益，不能替代这两个独立父checkpoint上的完整流程验证。
 
 ## 6. 证据路径与缺失项
 
@@ -429,6 +448,8 @@ C 单独相对 A 增加34,248个 FP、减少15,988个 FN，实际行为是以更
 - seed1337/3407 统一 Val 诊断：上述各目录的 `val_diagnostics/`
 - Gated A seed1337：`results/v6_overlap40/gated_boundary_resnet50_seed1337_bw0_batch4/`
 - Gated A seed1337 统一 Val 诊断：上述目录的 `val_diagnostics/`
+- Gated-ReZero A′ seed42/1337：`results/v6_overlap40/gated_rezero_resnet50_seed{42,1337}_batch4/`
+- Gated-ReZero A′统一 Val 诊断：上述各目录的 `val_diagnostics/`
 - 数据协议审计：`results/data_audit_v6_random_overlap40/`
 
 ### 6.2 仅有旧文档记录、待补原始产物
