@@ -49,6 +49,7 @@ GATED_MODULE_NAMES = {
     "gated_cmcr",
     "gated_rezero",
     "gated_rezero_cmcr",
+    "gated_rezero_ms_cmcr",
 }
 FEC_MODULE_NAMES = {"deeplab_fec", "gated_fec"}
 BOUNDARY_MODULE_NAMES = GATED_MODULE_NAMES | {"gated_fec"}
@@ -484,6 +485,7 @@ def parse_args() -> argparse.Namespace:
             "gated_fec",
             "gated_rezero",
             "gated_rezero_cmcr",
+            "gated_rezero_ms_cmcr",
             "stdl_swinv2_small",
             "stdl_swinv2_base",
         ),
@@ -514,9 +516,13 @@ def parse_args() -> argparse.Namespace:
         parser.error("foreground-weight must be non-negative")
     if args.early_stopping_patience < 0:
         parser.error("early-stopping-patience must be non-negative")
-    if args.freeze_base and args.module not in {"gated_cmcr", "gated_rezero_cmcr"}:
+    if args.freeze_base and args.module not in {
+        "gated_cmcr",
+        "gated_rezero_cmcr",
+        "gated_rezero_ms_cmcr",
+    }:
         parser.error(
-            "freeze-base requires --module gated_cmcr or gated_rezero_cmcr"
+            "freeze-base requires a gated CMCR module"
         )
     if args.freeze_base and not args.init_checkpoint:
         parser.error("freeze-base requires --init-checkpoint")

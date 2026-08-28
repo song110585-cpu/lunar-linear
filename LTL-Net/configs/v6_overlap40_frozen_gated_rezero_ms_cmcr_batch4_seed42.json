@@ -1,0 +1,53 @@
+{
+  "experiment": "v6_overlap40_frozen_gated_rezero42_ms_cmcr42_batch4",
+  "hypothesis": "A spatially gated 1/4 and 1/8 cross-modal pyramid can correct both local and contextual errors beyond the validated single-scale CMCR.",
+  "unique_variable": "replace the single 1/4-scale CMCR with a zero-initialized dual-scale MS-CMCR while keeping the validated seed42 Gated-ReZero parent frozen",
+  "module": "gated_rezero_ms_cmcr",
+  "parent_model": "gated_rezero",
+  "parent_seed": 42,
+  "encoder": "resnet50",
+  "encoder_weights": "none",
+  "seed": 42,
+  "epochs": 40,
+  "early_stopping_patience": 8,
+  "batch_size": 4,
+  "accum_steps": 1,
+  "num_workers": 2,
+  "learning_rate": 0.0001,
+  "boundary_weight": 0.0,
+  "freeze_base": true,
+  "cross_modal_scales": [4, 8],
+  "scale_fusion": "spatial_softmax",
+  "expected_trainable_parameter_count": 92663,
+  "expected_init_checkpoint_sha256": "d6fd9b1a940d707ff64fe05383e9326420a7a586acf0182cb38c7f5a776b0ed4",
+  "expected_initial_validation_miou_fg": 0.7092485278844833,
+  "initial_validation_tolerance": 0.0001,
+  "selection_metric": "val_mIoU_fg",
+  "run_name": "v6_overlap40_frozen_gated_rezero42_ms_cmcr42_batch4_valfg",
+  "expected_tiles": {
+    "train": 1598,
+    "val": 200,
+    "test": 200
+  },
+  "expected_mean": [
+    0.15665339073973303,
+    0.6052870962271574,
+    0.22171011101838023,
+    0.5087022443378417,
+    0.46687463729626205
+  ],
+  "expected_std": [
+    0.07239327406001447,
+    0.35159567816693277,
+    0.23999408652260576,
+    0.18305312443820845,
+    0.18653673179588806
+  ],
+  "expected_metadata_sha256": {
+    "dataset_protocol.json": "c4fb9282ad3da6ae5b7cd1fc61603b665c38ed5e26a61e92c78332f0e5552763",
+    "dataset_summary.json": "e56042b0e9a84eef330bda65fb0eeee94a66faa1769e68a487f06feaa19ede7b",
+    "normalization_stats.json": "866d9ab4e80ce6abf3189d60578fb53e4f99d5fe9233270bd31f5a6d09b740b2",
+    "tile_manifest.csv": "e1eb2a8ddf2ed6c2a6f57277a1e8151ee8f4b6b9fa7c5a57d39f1a9ec9d2d4d9"
+  },
+  "automatic_test_evaluation": false
+}

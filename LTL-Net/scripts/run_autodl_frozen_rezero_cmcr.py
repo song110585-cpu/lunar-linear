@@ -52,7 +52,7 @@ def main() -> None:
     init_checkpoint = Path(args.init_checkpoint).resolve()
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
-    if config["module"] != "gated_rezero_cmcr":
+    if config["module"] not in {"gated_rezero_cmcr", "gated_rezero_ms_cmcr"}:
         raise ValueError(f"unexpected module: {config['module']}")
     if config["parent_model"] != "gated_rezero":
         raise ValueError(f"unexpected parent model: {config['parent_model']}")
@@ -141,7 +141,8 @@ def main() -> None:
 
     trainable = [parameter for parameter in enhanced.parameters() if parameter.requires_grad]
     trainable_count = sum(parameter.numel() for parameter in trainable)
-    if trainable_count != 42133:
+    expected_trainable_count = config.get("expected_trainable_parameter_count", 42133)
+    if trainable_count != expected_trainable_count:
         raise RuntimeError(f"unexpected CMCR trainable parameter count: {trainable_count}")
     if torch.count_nonzero(enhanced.cmcr.residual_head.weight):
         raise RuntimeError("CMCR residual head must start at exact zero")

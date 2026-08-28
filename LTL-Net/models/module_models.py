@@ -255,6 +255,96 @@ class CrossModalConsistencyResidual(nn.Module):
             )
 
 
+class MultiScaleCrossModalConsistencyResidual(nn.Module):
+    """Fuse local 1/4 and contextual 1/8 cross-modal evidence behind one interface."""
+
+    def __init__(self, feature_channels: int = 32, classes: int = 5) -> None:
+        super().__init__()
+        hidden_channels = feature_channels // 2
+        self.appearance_stem = nn.Sequential(
+            _conv_norm_relu(1, hidden_channels, 3, stride=2),
+            _conv_norm_relu(hidden_channels, feature_channels, 3, stride=2),
+        )
+        self.terrain_stem = nn.Sequential(
+            _conv_norm_relu(4, hidden_channels, 3, stride=2),
+            _conv_norm_relu(hidden_channels, feature_channels, 3, stride=2),
+        )
+        self.local_consistency_gate = nn.Sequential(
+            nn.Conv2d(4 * feature_channels, feature_channels, 1, bias=True),
+            nn.Sigmoid(),
+        )
+        self.local_fusion = _conv_norm_relu(
+            3 * feature_channels, feature_channels, 3
+        )
+        self.context_appearance = _conv_norm_relu(
+            feature_channels, feature_channels, 3, stride=2
+        )
+        self.context_terrain = _conv_norm_relu(
+            feature_channels, feature_channels, 3, stride=2
+        )
+        self.context_consistency_gate = nn.Sequential(
+            nn.Conv2d(4 * feature_channels, feature_channels, 1, bias=True),
+            nn.Sigmoid(),
+        )
+        self.context_fusion = _conv_norm_relu(
+            3 * feature_channels, feature_channels, 3
+        )
+        self.scale_gate = nn.Sequential(
+            nn.Conv2d(2 * feature_channels, 2, 1, bias=True),
+            nn.Softmax(dim=1),
+        )
+        self.residual_head = nn.Conv2d(feature_channels, classes, 1, bias=True)
+        nn.init.zeros_(self.residual_head.weight)
+        nn.init.zeros_(self.residual_head.bias)
+
+    @staticmethod
+    def _fuse_scale(
+        appearance: torch.Tensor,
+        terrain: torch.Tensor,
+        consistency_gate: nn.Module,
+        fusion: nn.Module,
+    ) -> torch.Tensor:
+        difference = torch.abs(appearance - terrain)
+        interaction = appearance * terrain
+        gate = consistency_gate(
+            torch.cat((appearance, terrain, difference, interaction), dim=1)
+        )
+        return fusion(
+            torch.cat((appearance * gate, terrain * gate, difference), dim=1)
+        )
+
+    def forward(self, inputs: torch.Tensor, output_size: tuple[int, int]) -> torch.Tensor:
+        # The raw terrain channels can overflow in float16 during interaction.
+        with torch.autocast(device_type=inputs.device.type, enabled=False):
+            inputs = inputs.float()
+            appearance_4 = self.appearance_stem(inputs[:, :1])
+            terrain_4 = self.terrain_stem(inputs[:, 1:])
+            local = self._fuse_scale(
+                appearance_4,
+                terrain_4,
+                self.local_consistency_gate,
+                self.local_fusion,
+            )
+
+            appearance_8 = self.context_appearance(appearance_4)
+            terrain_8 = self.context_terrain(terrain_4)
+            context = self._fuse_scale(
+                appearance_8,
+                terrain_8,
+                self.context_consistency_gate,
+                self.context_fusion,
+            )
+            context = F.interpolate(
+                context, size=local.shape[-2:], mode="bilinear", align_corners=False
+            )
+            scale_weights = self.scale_gate(torch.cat((local, context), dim=1))
+            fused = scale_weights[:, :1] * local + scale_weights[:, 1:] * context
+            residual = self.residual_head(fused)
+            return F.interpolate(
+                residual, size=output_size, mode="bilinear", align_corners=False
+            )
+
+
 class DeepLabCMCRResNet50(DeepLabResNet50):
     """Unmodified DeepLabV3+ plus the standalone CMCR correction."""
 
@@ -388,6 +478,41 @@ class GatedReZeroCMCRResNet50(GatedReZeroResNet50):
         return outputs
 
 
+class GatedReZeroMSCMCRResNet50(GatedReZeroResNet50):
+    """Frozen ReZero parent plus zero-init dual-scale cross-modal correction."""
+
+    def __init__(
+        self,
+        encoder_weights: str | None = "imagenet",
+        classes: int = 5,
+        shape_channels: int = 32,
+        cmcr_channels: int = 32,
+    ) -> None:
+        super().__init__(
+            encoder_weights=encoder_weights,
+            classes=classes,
+            shape_channels=shape_channels,
+        )
+        self.cmcr = MultiScaleCrossModalConsistencyResidual(
+            feature_channels=cmcr_channels, classes=classes
+        )
+        self.experiment_identity = {
+            **self.experiment_identity,
+            "architecture": "GatedReZeroMSCMCRResNet50",
+            "cmcr_residual_init": 0.0,
+            "cross_modal_scales": (4, 8),
+            "scale_fusion": "spatial_softmax",
+            "training_regime": "freeze_gated_rezero_then_train_ms_cmcr",
+        }
+
+    def forward_with_aux(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        outputs = super().forward_with_aux(x)
+        outputs["logits"] = outputs["logits"] + self.cmcr(
+            x, outputs["logits"].shape[-2:]
+        )
+        return outputs
+
+
 class GatedFECResNet50(GatedBoundaryResNet50):
     """Validated semantic-gated fusion plus foreground-evidence calibration."""
 
@@ -439,6 +564,8 @@ def build_module_model(name: str, encoder_weights: str | None = "imagenet") -> n
         return GatedCMCRResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_rezero_cmcr", "gated_rezero_cmcr_resnet50"}:
         return GatedReZeroCMCRResNet50(encoder_weights=encoder_weights)
+    if normalized in {"gated_rezero_ms_cmcr", "gated_rezero_ms_cmcr_resnet50"}:
+        return GatedReZeroMSCMCRResNet50(encoder_weights=encoder_weights)
     if normalized in {"gated_fec", "gated_fec_resnet50"}:
         return GatedFECResNet50(encoder_weights=encoder_weights)
     raise ValueError(f"unknown module model: {name}")

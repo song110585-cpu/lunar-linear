@@ -43,6 +43,7 @@ MODULE_MODEL_NAMES = {
     "gated_fec",
     "gated_rezero",
     "gated_rezero_cmcr",
+    "gated_rezero_ms_cmcr",
     "stdl_swinv2_small",
     "stdl_swinv2_base",
 }
@@ -52,6 +53,7 @@ GATED_MODEL_NAMES = {
     "gated_fec",
     "gated_rezero",
     "gated_rezero_cmcr",
+    "gated_rezero_ms_cmcr",
 }
 LABEL_CMAP = ListedColormap(["#111111", "#f4d03f", "#2e86de", "#e74c3c", "#af7ac5"])
 ERROR_CMAP = ListedColormap(["#111111", "#e74c3c", "#3498db", "#f1c40f"])
@@ -346,6 +348,14 @@ def main():
     auxiliary_boundary_pixels = 0
     gate_stats = {"sum": 0.0, "sum_sq": 0.0, "count": 0, "low": 0, "high": 0}
     cmcr_gate_stats = {"sum": 0.0, "sum_sq": 0.0, "count": 0, "low": 0, "high": 0}
+    cmcr_context_gate_stats = {
+        "sum": 0.0,
+        "sum_sq": 0.0,
+        "count": 0,
+        "low": 0,
+        "high": 0,
+    }
+    cmcr_scale_stats = {"sum": [0.0, 0.0], "sum_sq": [0.0, 0.0], "count": 0}
     hook_handles = []
 
     def register_gate_hook(module, stats):
@@ -359,11 +369,29 @@ def main():
 
         hook_handles.append(module.register_forward_hook(capture_gate))
 
+    def register_scale_hook(module, stats):
+        def capture_scale(_module, _inputs, output):
+            values = output.detach().float()
+            channel_sum = values.sum(dim=(0, 2, 3)).cpu().tolist()
+            channel_sum_sq = (values * values).sum(dim=(0, 2, 3)).cpu().tolist()
+            for index in range(2):
+                stats["sum"][index] += channel_sum[index]
+                stats["sum_sq"][index] += channel_sum_sq[index]
+            stats["count"] += values.shape[0] * values.shape[2] * values.shape[3]
+
+        hook_handles.append(module.register_forward_hook(capture_scale))
+
     normalized_model = args.model.lower().replace("-", "_")
     if normalized_model in GATED_MODEL_NAMES:
         register_gate_hook(model.boundary_refinement.gate, gate_stats)
     if normalized_model in {"deeplab_cmcr", "gated_cmcr", "gated_rezero_cmcr"}:
         register_gate_hook(model.cmcr.consistency_gate, cmcr_gate_stats)
+    if normalized_model == "gated_rezero_ms_cmcr":
+        register_gate_hook(model.cmcr.local_consistency_gate, cmcr_gate_stats)
+        register_gate_hook(
+            model.cmcr.context_consistency_gate, cmcr_context_gate_stats
+        )
+        register_scale_hook(model.cmcr.scale_gate, cmcr_scale_stats)
     losses = []
     rows = []
     model.eval()
@@ -469,6 +497,38 @@ def main():
             "std": variance ** 0.5,
             "fraction_below_0_05": cmcr_gate_stats["low"] / cmcr_gate_stats["count"],
             "fraction_above_0_95": cmcr_gate_stats["high"] / cmcr_gate_stats["count"],
+        }
+    if cmcr_context_gate_stats["count"]:
+        mean = cmcr_context_gate_stats["sum"] / cmcr_context_gate_stats["count"]
+        variance = max(
+            cmcr_context_gate_stats["sum_sq"]
+            / cmcr_context_gate_stats["count"]
+            - mean * mean,
+            0.0,
+        )
+        payload["cmcr_context_gate_activation"] = {
+            "mean": mean,
+            "std": variance ** 0.5,
+            "fraction_below_0_05": cmcr_context_gate_stats["low"]
+            / cmcr_context_gate_stats["count"],
+            "fraction_above_0_95": cmcr_context_gate_stats["high"]
+            / cmcr_context_gate_stats["count"],
+        }
+    if cmcr_scale_stats["count"]:
+        means = [value / cmcr_scale_stats["count"] for value in cmcr_scale_stats["sum"]]
+        variances = [
+            max(
+                cmcr_scale_stats["sum_sq"][index] / cmcr_scale_stats["count"]
+                - means[index] * means[index],
+                0.0,
+            )
+            for index in range(2)
+        ]
+        payload["cmcr_scale_weights"] = {
+            "local_1_4_mean": means[0],
+            "context_1_8_mean": means[1],
+            "local_1_4_std": variances[0] ** 0.5,
+            "context_1_8_std": variances[1] ** 0.5,
         }
     residual_scale = getattr(
         getattr(model, "boundary_refinement", None), "residual_scale", None
