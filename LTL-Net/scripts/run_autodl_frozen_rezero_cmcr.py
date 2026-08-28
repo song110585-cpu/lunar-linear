@@ -33,6 +33,13 @@ def count_images(data_root: Path, split: str) -> int:
     return len([*image_dir.glob("*.tif"), *image_dir.glob("*.tiff")])
 
 
+def build_frozen_experiment_models(config: dict, model_builder):
+    """Build the declared parent and correction model without hard-coded variants."""
+    parent = model_builder(config["parent_model"], encoder_weights=None)
+    enhanced = model_builder(config["module"], encoder_weights=None)
+    return parent, enhanced
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-dir", required=True)
@@ -116,11 +123,12 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA GPU is required for the batch4 smoke test")
     device = torch.device("cuda")
-    parent = build_module_model("gated_rezero", encoder_weights=None).to(device).eval()
+    parent, enhanced = build_frozen_experiment_models(config, build_module_model)
+    parent = parent.to(device).eval()
     parent.load_state_dict(
         torch.load(init_checkpoint, map_location=device, weights_only=True), strict=True
     )
-    enhanced = build_module_model("gated_rezero_cmcr", encoder_weights=None).to(device)
+    enhanced = enhanced.to(device)
     load_report = load_frozen_cmcr_base(enhanced, str(init_checkpoint), device)
     enhanced.eval()
     enhanced.cmcr.train()

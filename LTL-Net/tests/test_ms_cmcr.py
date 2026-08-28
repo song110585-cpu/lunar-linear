@@ -16,6 +16,7 @@ from models.module_models import (
     build_module_model,
 )
 from train_module_experiment import load_frozen_cmcr_base
+from run_autodl_frozen_rezero_cmcr import build_frozen_experiment_models
 
 
 def test_ms_cmcr_starts_as_exact_rezero_parent():
@@ -96,3 +97,14 @@ def test_ms_cmcr_seed42_config_binds_validated_parent_and_protocol():
     assert config["learning_rate"] == 1e-4
     assert config["batch_size"] == 4 and config["accum_steps"] == 1
     assert config["automatic_test_evaluation"] is False
+
+
+def test_autodl_runner_builds_the_module_named_by_config():
+    config = {
+        "parent_model": "gated_rezero",
+        "module": "gated_rezero_ms_cmcr",
+    }
+    parent, enhanced = build_frozen_experiment_models(config, build_module_model)
+    assert isinstance(parent, GatedReZeroResNet50)
+    assert isinstance(enhanced, GatedReZeroMSCMCRResNet50)
+    assert sum(parameter.numel() for parameter in enhanced.cmcr.parameters()) == 92663
