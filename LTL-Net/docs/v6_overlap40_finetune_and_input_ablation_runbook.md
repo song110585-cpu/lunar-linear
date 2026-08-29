@@ -37,12 +37,12 @@ INIT_CHECKPOINT = Path('.../best_model.pth')
 
 ## 3. DeepLab输入影像消融 I0-I3
 
-| 实验 | channel_mode | 有效通道 | Notebook |
-|---|---|---|---|
-| I0 | `full` | WAC+DEM+Slope+TPI+Curvature | `notebooks/autodl_v6_overlap40_deeplab_input_full_seed42.ipynb` |
-| I1 | `wac_only` | WAC | `notebooks/autodl_v6_overlap40_deeplab_input_wac_only_seed42.ipynb` |
-| I2 | `terrain_only` | DEM+Slope+TPI+Curvature | `notebooks/autodl_v6_overlap40_deeplab_input_terrain_only_seed42.ipynb` |
-| I3 | `wac_dem` | WAC+DEM | `notebooks/autodl_v6_overlap40_deeplab_input_wac_dem_seed42.ipynb` |
+| 实验 | channel_mode | 有效通道 | AutoDL Notebook | Kaggle Notebook |
+|---|---|---|---|---|
+| I0 | `full` | WAC+DEM+Slope+TPI+Curvature | `notebooks/autodl_v6_overlap40_deeplab_input_full_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_full_seed42.ipynb` |
+| I1 | `wac_only` | WAC | `notebooks/autodl_v6_overlap40_deeplab_input_wac_only_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_wac_only_seed42.ipynb` |
+| I2 | `terrain_only` | DEM+Slope+TPI+Curvature | `notebooks/autodl_v6_overlap40_deeplab_input_terrain_only_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_terrain_only_seed42.ipynb` |
+| I3 | `wac_dem` | WAC+DEM | `notebooks/autodl_v6_overlap40_deeplab_input_wac_dem_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_wac_dem_seed42.ipynb` |
 
 四项共同条件：
 
