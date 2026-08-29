@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 import numpy as np
+from segmentation_models_pytorch.losses import LovaszLoss
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -33,7 +34,7 @@ for path in (PROJECT_ROOT, PROJECT_ROOT / "utils", PROJECT_ROOT / "datasets"):
 
 import metrics  # noqa: E402
 from experiment_artifacts import save_training_history  # noqa: E402
-from MyDataset import MyDataset  # noqa: E402
+from MyDataset import CHANNEL_MODE_MASKS, MyDataset  # noqa: E402
 from models.module_models import build_module_model  # noqa: E402
 
 
@@ -104,13 +105,16 @@ class ExperimentLoss(nn.Module):
         module_name: str,
         boundary_weight: float = 0.2,
         foreground_weight: float = 0.1,
+        lovasz_weight: float = 0.0,
     ) -> None:
         super().__init__()
         self.module_name = module_name
         self.boundary_weight = boundary_weight
         self.foreground_weight = foreground_weight
+        self.lovasz_weight = lovasz_weight
         self.register_buffer("class_weights", torch.tensor(CLASS_WEIGHTS, dtype=torch.float32))
         self.semantic = nn.CrossEntropyLoss(weight=self.class_weights)
+        self.lovasz = LovaszLoss(mode="multiclass", per_image=False)
 
     def forward(
         self,
@@ -120,6 +124,11 @@ class ExperimentLoss(nn.Module):
         foreground_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         semantic_loss = self.semantic(logits, labels)
+        lovasz_loss = (
+            self.lovasz(logits.float(), labels)
+            if self.lovasz_weight > 0
+            else logits.new_zeros(())
+        )
         boundary_loss = logits.new_zeros(())
         if self.module_name in BOUNDARY_MODULE_NAMES:
             if boundary_logits is None:
@@ -144,11 +153,13 @@ class ExperimentLoss(nn.Module):
             )
         total = (
             semantic_loss
+            + self.lovasz_weight * lovasz_loss
             + self.boundary_weight * boundary_loss
             + self.foreground_weight * foreground_loss
         )
         return total, {
             "semantic_loss": float(semantic_loss.detach()),
+            "lovasz_loss": float(lovasz_loss.detach()),
             "boundary_loss": float(boundary_loss.detach()),
             "foreground_loss": float(foreground_loss.detach()),
         }
@@ -191,6 +202,7 @@ def evaluate(
     hist = torch.zeros(5, 5, dtype=torch.float64)
     losses: list[float] = []
     semantic_losses: list[float] = []
+    lovasz_losses: list[float] = []
     boundary_losses: list[float] = []
     foreground_losses: list[float] = []
     for step, (images, labels, _) in enumerate(tqdm(loader, desc="Validation", unit="batch")):
@@ -206,6 +218,7 @@ def evaluate(
             )
         losses.append(float(loss))
         semantic_losses.append(parts["semantic_loss"])
+        lovasz_losses.append(parts["lovasz_loss"])
         boundary_losses.append(parts["boundary_loss"])
         foreground_losses.append(parts["foreground_loss"])
         hist += metrics.multiclass_confusion(logits.argmax(1), labels, 5).double()
@@ -213,6 +226,7 @@ def evaluate(
     result.update(
         loss=float(np.mean(losses)),
         semantic_loss=float(np.mean(semantic_losses)),
+        lovasz_loss=float(np.mean(lovasz_losses)),
         boundary_loss=float(np.mean(boundary_losses)),
         foreground_loss=float(np.mean(foreground_losses)),
     )
@@ -242,6 +256,57 @@ def load_frozen_cmcr_base(
     return {"missing_keys": missing, "unexpected_keys": unexpected}
 
 
+def load_joint_finetune_checkpoint(
+    model: nn.Module, checkpoint_path: str, device: torch.device
+) -> dict[str, object]:
+    """Strictly load a complete model, then freeze its encoder and every BatchNorm."""
+    try:
+        state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    except TypeError:  # PyTorch < 2.0
+        state = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(state, strict=True)
+
+    for parameter in model.parameters():
+        parameter.requires_grad_(True)
+    for parameter in model.encoder.parameters():
+        parameter.requires_grad_(False)
+    frozen_batch_norm_parameters = 0
+    for module in model.modules():
+        if isinstance(module, nn.modules.batchnorm._BatchNorm):
+            module.eval()
+            for parameter in module.parameters(recurse=False):
+                if parameter.requires_grad:
+                    frozen_batch_norm_parameters += parameter.numel()
+                parameter.requires_grad_(False)
+
+    trainable_names = [
+        name for name, parameter in model.named_parameters() if parameter.requires_grad
+    ]
+    required_prefixes = ("decoder.", "segmentation_head.", "boundary_refinement.", "cmcr.")
+    for prefix in required_prefixes:
+        if not any(name.startswith(prefix) for name in trainable_names):
+            raise RuntimeError(f"joint fine-tune has no trainable parameters under {prefix}")
+    if any(name.startswith("encoder.") for name in trainable_names):
+        raise RuntimeError("joint fine-tune must keep the encoder frozen")
+    return {
+        "missing_keys": [],
+        "unexpected_keys": [],
+        "frozen_encoder": True,
+        "frozen_batch_norm": True,
+        "frozen_batch_norm_parameter_count": frozen_batch_norm_parameters,
+        "trainable_prefixes": list(required_prefixes),
+    }
+
+
+def set_joint_finetune_train_mode(model: nn.Module) -> None:
+    """Train decoder/refinement modules while keeping encoder and BatchNorm fixed."""
+    model.train()
+    model.encoder.eval()
+    for module in model.modules():
+        if isinstance(module, nn.modules.batchnorm._BatchNorm):
+            module.eval()
+
+
 def train(args: argparse.Namespace) -> dict:
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -251,8 +316,16 @@ def train(args: argparse.Namespace) -> dict:
     output_dir.mkdir(parents=True)
 
     data_root = Path(args.data_dir).resolve()
-    train_data = MyDataset(str(data_root / "train" / "image"), str(data_root / "train" / "mask"))
-    val_data = MyDataset(str(data_root / "val" / "image"), str(data_root / "val" / "mask"))
+    train_data = MyDataset(
+        str(data_root / "train" / "image"),
+        str(data_root / "train" / "mask"),
+        channel_mode=args.channel_mode,
+    )
+    val_data = MyDataset(
+        str(data_root / "val" / "image"),
+        str(data_root / "val" / "mask"),
+        channel_mode=args.channel_mode,
+    )
     generator = torch.Generator().manual_seed(args.seed)
     train_loader = DataLoader(
         train_data,
@@ -292,9 +365,19 @@ def train(args: argparse.Namespace) -> dict:
         init_checkpoint_sha256 = hashlib.sha256(
             Path(args.init_checkpoint).read_bytes()
         ).hexdigest()
+    elif args.joint_finetune:
+        load_report = load_joint_finetune_checkpoint(
+            model, args.init_checkpoint, device
+        )
+        init_checkpoint_sha256 = hashlib.sha256(
+            Path(args.init_checkpoint).read_bytes()
+        ).hexdigest()
     with_aux = args.module in GATED_MODULE_NAMES
     criterion = ExperimentLoss(
-        args.module, args.boundary_weight, args.foreground_weight
+        args.module,
+        args.boundary_weight,
+        args.foreground_weight,
+        args.lovasz_weight,
     ).to(device)
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = AdamW(trainable_parameters, lr=args.learning_rate)
@@ -327,7 +410,7 @@ def train(args: argparse.Namespace) -> dict:
     print(json.dumps(config, ensure_ascii=False, indent=2))
 
     epochs_without_improvement = 0
-    if args.freeze_base:
+    if args.freeze_base or args.joint_finetune:
         initial_validation = evaluate(
             model, val_loader, criterion, device, with_aux, args.max_steps
         )
@@ -339,7 +422,7 @@ def train(args: argparse.Namespace) -> dict:
         )
         print(
             json.dumps(
-                {"frozen_base_epoch_zero": initial_validation},
+                {"checkpoint_epoch_zero": initial_validation},
                 ensure_ascii=False,
             )
         )
@@ -348,12 +431,15 @@ def train(args: argparse.Namespace) -> dict:
         if args.freeze_base:
             model.eval()
             model.cmcr.train()
+        elif args.joint_finetune:
+            set_joint_finetune_train_mode(model)
         else:
             model.train()
         optimizer.zero_grad(set_to_none=True)
         train_hist = torch.zeros(5, 5, dtype=torch.float64)
         train_losses: list[float] = []
         train_semantic_losses: list[float] = []
+        train_lovasz_losses: list[float] = []
         train_boundary_losses: list[float] = []
         train_foreground_losses: list[float] = []
         for step, (images, labels, _) in enumerate(
@@ -388,6 +474,7 @@ def train(args: argparse.Namespace) -> dict:
                 optimizer.zero_grad(set_to_none=True)
             train_losses.append(float(full_loss.detach()))
             train_semantic_losses.append(parts["semantic_loss"])
+            train_lovasz_losses.append(parts["lovasz_loss"])
             train_boundary_losses.append(parts["boundary_loss"])
             train_foreground_losses.append(parts["foreground_loss"])
             train_hist += metrics.multiclass_confusion(logits.argmax(1), labels, 5).double()
@@ -408,6 +495,7 @@ def train(args: argparse.Namespace) -> dict:
             "learning_rate": float(optimizer.param_groups[0]["lr"]),
             "train_loss": float(np.mean(train_losses)),
             "train_semantic_loss": float(np.mean(train_semantic_losses)),
+            "train_lovasz_loss": float(np.mean(train_lovasz_losses)),
             "train_boundary_loss": float(np.mean(train_boundary_losses)),
             "train_foreground_loss": float(np.mean(train_foreground_losses)),
             "train_accuracy": train_metrics["accuracy"],
@@ -416,6 +504,7 @@ def train(args: argparse.Namespace) -> dict:
             "train_mf1": train_metrics["mf1"],
             "val_loss": val_metrics["loss"],
             "val_semantic_loss": val_metrics["semantic_loss"],
+            "val_lovasz_loss": val_metrics["lovasz_loss"],
             "val_boundary_loss": val_metrics["boundary_loss"],
             "val_foreground_loss": val_metrics["foreground_loss"],
             "val_accuracy": val_metrics["accuracy"],
@@ -454,6 +543,9 @@ def train(args: argparse.Namespace) -> dict:
         "epochs_completed": len(history),
         "git_commit": commit,
         "selection_metric": "val_mIoU_fg",
+        "channel_mode": args.channel_mode,
+        "lovasz_weight": args.lovasz_weight,
+        "joint_finetune": args.joint_finetune,
         "initial_validation": initial_validation,
         "initial_validation_file": (
             "initial_validation.json" if initial_validation is not None else None
@@ -502,10 +594,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--boundary-weight", type=float, default=0.2)
     parser.add_argument("--foreground-weight", type=float, default=0.1)
+    parser.add_argument("--lovasz-weight", type=float, default=0.0)
+    parser.add_argument(
+        "--channel-mode",
+        choices=tuple(CHANNEL_MODE_MASKS),
+        default="full",
+    )
     parser.add_argument("--encoder-weights", default="imagenet")
     parser.add_argument("--expected-pretrain-sha256", default="")
     parser.add_argument("--init-checkpoint", default="")
     parser.add_argument("--freeze-base", action="store_true")
+    parser.add_argument("--joint-finetune", action="store_true")
     parser.add_argument("--early-stopping-patience", type=int, default=0)
     args = parser.parse_args()
     if args.batch_size <= 0 or args.accum_steps <= 0:
@@ -514,6 +613,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("boundary-weight must be non-negative")
     if args.foreground_weight < 0:
         parser.error("foreground-weight must be non-negative")
+    if args.lovasz_weight < 0:
+        parser.error("lovasz-weight must be non-negative")
     if args.early_stopping_patience < 0:
         parser.error("early-stopping-patience must be non-negative")
     if args.freeze_base and args.module not in {
@@ -524,9 +625,13 @@ def parse_args() -> argparse.Namespace:
         parser.error(
             "freeze-base requires a gated CMCR module"
         )
-    if args.freeze_base and not args.init_checkpoint:
-        parser.error("freeze-base requires --init-checkpoint")
-    if args.freeze_base and not Path(args.init_checkpoint).is_file():
+    if args.freeze_base and args.joint_finetune:
+        parser.error("freeze-base and joint-finetune are mutually exclusive")
+    if args.joint_finetune and args.module != "gated_rezero_cmcr":
+        parser.error("joint-finetune requires module gated_rezero_cmcr")
+    if (args.freeze_base or args.joint_finetune) and not args.init_checkpoint:
+        parser.error("checkpoint-based training requires --init-checkpoint")
+    if (args.freeze_base or args.joint_finetune) and not Path(args.init_checkpoint).is_file():
         parser.error(f"init checkpoint not found: {args.init_checkpoint}")
     return args
 

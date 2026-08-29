@@ -1,0 +1,48 @@
+{
+  "experiment": "v6_overlap40_deeplab_input_terrain_only_batch4_seed42",
+  "hypothesis": "The terrain-only input (DEM, Slope, TPI and Profile Curvature) quantifies its information contribution under a fixed DeepLabV3+-ResNet50 training protocol.",
+  "unique_variable": "channel_mode=terrain_only; architecture, parameter count, split, seed, optimizer and validation selection remain fixed",
+  "module": "deeplab",
+  "encoder": "resnet50",
+  "encoder_weights": "imagenet",
+  "seed": 42,
+  "epochs": 80,
+  "batch_size": 4,
+  "accum_steps": 1,
+  "num_workers": 2,
+  "learning_rate": 0.00005,
+  "boundary_weight": 0.0,
+  "foreground_weight": 0.0,
+  "lovasz_weight": 0.0,
+  "channel_mode": "terrain_only",
+  "freeze_base": false,
+  "joint_finetune": false,
+  "selection_metric": "val_mIoU_fg",
+  "run_name": "v6_overlap40_deeplab_resnet50_input_terrain_only_seed42_batch4_valfg",
+  "expected_tiles": {
+    "train": 1598,
+    "val": 200,
+    "test": 200
+  },
+  "expected_mean": [
+    0.15665339073973303,
+    0.6052870962271574,
+    0.22171011101838023,
+    0.5087022443378417,
+    0.46687463729626205
+  ],
+  "expected_std": [
+    0.07239327406001447,
+    0.35159567816693277,
+    0.23999408652260576,
+    0.18305312443820845,
+    0.18653673179588806
+  ],
+  "expected_metadata_sha256": {
+    "dataset_protocol.json": "c4fb9282ad3da6ae5b7cd1fc61603b665c38ed5e26a61e92c78332f0e5552763",
+    "dataset_summary.json": "e56042b0e9a84eef330bda65fb0eeee94a66faa1769e68a487f06feaa19ede7b",
+    "normalization_stats.json": "866d9ab4e80ce6abf3189d60578fb53e4f99d5fe9233270bd31f5a6d09b740b2",
+    "tile_manifest.csv": "e1eb2a8ddf2ed6c2a6f57277a1e8151ee8f4b6b9fa7c5a57d39f1a9ec9d2d4d9"
+  },
+  "automatic_test_evaluation": false
+}

@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import metrics
-from MyDataset import MyDataset
+from MyDataset import CHANNEL_MODE_MASKS, MyDataset
 from models.dlinknet import DLinkNet
 from models.ltl_net import LTLNet
 from models.module_models import build_module_model
@@ -312,6 +312,12 @@ def main():
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument(
+        "--channel-mode",
+        choices=tuple(CHANNEL_MODE_MASKS),
+        default="full",
+        help="归一化后将被消融通道置零；full保持原输入",
+    )
+    parser.add_argument(
         "--amp",
         action="store_true",
         help="启用 CUDA autocast；默认使用 FP32，避免部分消费级 GPU 推理产生非有限 logits",
@@ -335,6 +341,7 @@ def main():
     dataset = MyDataset(
         str(data_root / args.split / "image"),
         str(data_root / args.split / "mask"),
+        channel_mode=args.channel_mode,
     )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
                         num_workers=args.num_workers, pin_memory=device.type == "cuda")
@@ -458,6 +465,7 @@ def main():
         "checkpoint": str(checkpoint_path),
         "data_root": str(data_root),
         "split": args.split,
+        "channel_mode": args.channel_mode,
         "class_names": CLASS_NAMES,
         "confusion_matrix": total_hist.tolist(),
         "foreground_binary_confusion": binary_hist.tolist(),

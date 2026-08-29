@@ -19,6 +19,38 @@ CHANNEL_MEAN = [0.14752520330929475, 0.5435313015308473, 0.25450968697236703, 0.
 CHANNEL_STD  = [0.0911210905176962, 0.3889732754917122, 0.26804529406580985, 0.21175783334461448, 0.21851573588525747]
 
 
+CHANNEL_MODE_MASKS = {
+    "full": (1, 1, 1, 1, 1),
+    "wac_only": (1, 0, 0, 0, 0),
+    "terrain_only": (0, 1, 1, 1, 1),
+    "wac_dem": (1, 1, 0, 0, 0),
+    "drop_wac": (0, 1, 1, 1, 1),
+    "drop_dem": (1, 0, 1, 1, 1),
+    "drop_slope": (1, 1, 0, 1, 1),
+    "drop_tpi": (1, 1, 1, 0, 1),
+    "drop_curvature": (1, 1, 1, 1, 0),
+}
+
+
+def channel_mask(channel_mode: str) -> np.ndarray:
+    """Return the fixed five-channel mask for one controlled modality ablation."""
+    try:
+        values = CHANNEL_MODE_MASKS[channel_mode]
+    except KeyError as exc:
+        choices = ", ".join(sorted(CHANNEL_MODE_MASKS))
+        raise ValueError(
+            f"未知 channel_mode={channel_mode!r}；可选值: {choices}"
+        ) from exc
+    return np.asarray(values, dtype=np.float32)
+
+
+def apply_channel_mode(image: np.ndarray, channel_mode: str) -> np.ndarray:
+    """Mean-impute ablated modalities by zeroing them after normalization."""
+    if image.ndim != 3 or image.shape[0] != 5:
+        raise ValueError(f"消融输入必须是 (5,H,W)，实际为 {image.shape}")
+    return image * channel_mask(channel_mode)[:, None, None]
+
+
 def _load_normalization_stats(images_dir: str) -> Tuple[np.ndarray, np.ndarray, Optional[Path]]:
     """从 <dataset_root>/normalization_stats.json 读取 Train-only 统计。"""
     image_path = Path(images_dir).resolve()
@@ -57,6 +89,7 @@ class MyDataset(Dataset):
         mean: Optional[Sequence[float]] = None,
         std: Optional[Sequence[float]] = None,
         valid_list_file: Optional[str] = None,
+        channel_mode: str = "full",
     ):
         """
         Args:
@@ -65,6 +98,10 @@ class MyDataset(Dataset):
         """
         self.images_dir = images_dir
         self.masks_dir = masks_dir
+        # Validate once at construction; the mask is applied after normalization,
+        # where zero represents the Train-only mean of an ablated channel.
+        channel_mask(channel_mode)
+        self.channel_mode = channel_mode
 
         if (mean is None) != (std is None):
             raise ValueError("mean 和 std 必须同时提供，或同时省略")
@@ -126,6 +163,7 @@ class MyDataset(Dataset):
 
         # 按通道归一化 (mean=0, std=1 时等于不做归一化)
         image = (image - self.mean[:, None, None]) / (self.std[:, None, None] + 1e-8)
+        image = apply_channel_mode(image, self.channel_mode)
 
         # ---- 读标签 ----
         with rasterio.open(os.path.join(self.masks_dir, fname)) as src:
