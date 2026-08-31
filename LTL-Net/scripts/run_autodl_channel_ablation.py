@@ -16,7 +16,14 @@ METADATA_FILES = (
     "normalization_stats.json",
     "tile_manifest.csv",
 )
-ABLATION_MODES = {"full", "wac_only", "terrain_only", "wac_dem"}
+ABLATION_MODES = {
+    "full",
+    "wac_only",
+    "terrain_only",
+    "wac_dem",
+    "wac_dem_slope",
+    "wac_dem_slope_tpi",
+}
 
 
 def sha256_file(path: Path) -> str:

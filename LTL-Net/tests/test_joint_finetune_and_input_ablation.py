@@ -30,6 +30,8 @@ def test_channel_modes_zero_only_declared_normalized_channels():
         "wac_only": (1, 0, 0, 0, 0),
         "terrain_only": (0, 1, 1, 1, 1),
         "wac_dem": (1, 1, 0, 0, 0),
+        "wac_dem_slope": (1, 1, 1, 0, 0),
+        "wac_dem_slope_tpi": (1, 1, 1, 1, 0),
     }
     for mode, mask in expected.items():
         result = apply_channel_mode(image, mode)
@@ -181,7 +183,14 @@ def test_seed42_replication_keeps_the_winning_joint_finetune_protocol():
 
 def test_input_ablation_configs_keep_protocol_fixed_and_only_change_channel_mode():
     config_dir = PROJECT_ROOT / "configs"
-    modes = ("full", "wac_only", "terrain_only", "wac_dem")
+    modes = (
+        "full",
+        "wac_only",
+        "terrain_only",
+        "wac_dem",
+        "wac_dem_slope",
+        "wac_dem_slope_tpi",
+    )
     configs = {
         mode: json.loads(
             (config_dir / f"v6_overlap40_deeplab_input_{mode}_batch4_seed42.json").read_text(

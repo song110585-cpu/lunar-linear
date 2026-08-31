@@ -24,6 +24,8 @@ CHANNEL_MODE_MASKS = {
     "wac_only": (1, 0, 0, 0, 0),
     "terrain_only": (0, 1, 1, 1, 1),
     "wac_dem": (1, 1, 0, 0, 0),
+    "wac_dem_slope": (1, 1, 1, 0, 0),
+    "wac_dem_slope_tpi": (1, 1, 1, 1, 0),
     "drop_wac": (0, 1, 1, 1, 1),
     "drop_dem": (1, 0, 1, 1, 1),
     "drop_slope": (1, 1, 0, 1, 1),

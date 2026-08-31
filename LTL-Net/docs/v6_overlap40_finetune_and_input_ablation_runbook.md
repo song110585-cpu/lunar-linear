@@ -5,7 +5,7 @@
 - 所有实验只使用 Train 训练、Val 选模。
 - runner 仅核验 Test 文件数量，不读取 Test 影像、标签或指标。
 - 两项联合微调从同一完整 A′→CMCR seed1337 checkpoint 开始。
-- 四项影像消融均为 DeepLabV3+-ResNet50、seed42、physical batch4、80 epochs。
+- 六项影像消融均为 DeepLabV3+-ResNet50、seed42、physical batch4、80 epochs。
 - 原始 GeoTIFF 不修改、不复制；无效通道在归一化后置零（等价于训练集均值填充）。
 
 ## 2. 联合微调 F0/F1
@@ -60,8 +60,10 @@ SHA-256: 2920e0a91b4d9998069e70ee4137669462e6e41bb6753c1749277616dd657e7f
 | I1 | `wac_only` | WAC | `notebooks/autodl_v6_overlap40_deeplab_input_wac_only_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_wac_only_seed42.ipynb` |
 | I2 | `terrain_only` | DEM+Slope+TPI+Curvature | `notebooks/autodl_v6_overlap40_deeplab_input_terrain_only_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_terrain_only_seed42.ipynb` |
 | I3 | `wac_dem` | WAC+DEM | `notebooks/autodl_v6_overlap40_deeplab_input_wac_dem_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_wac_dem_seed42.ipynb` |
+| I4 | `wac_dem_slope` | WAC+DEM+Slope | `notebooks/autodl_v6_overlap40_deeplab_input_wac_dem_slope_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_wac_dem_slope_seed42.ipynb` |
+| I5 | `wac_dem_slope_tpi` | WAC+DEM+Slope+TPI | `notebooks/autodl_v6_overlap40_deeplab_input_wac_dem_slope_tpi_seed42.ipynb` | `notebooks/kaggle_v6_overlap40_deeplab_input_wac_dem_slope_tpi_seed42.ipynb` |
 
-四项共同条件：
+六项共同条件：
 
 ```text
 model=deeplab
@@ -83,6 +85,11 @@ selection_metric=val_mIoU_fg
 - I0−I2：WAC在地形信息基础上的总体贡献。
 - I3−I1：DEM在WAC基础上的贡献。
 - I0−I3：Slope、TPI与Profile Curvature组合的额外贡献。
+- I4−I3：Slope在WAC+DEM基础上的顺序边际贡献。
+- I5−I4：TPI在WAC+DEM+Slope基础上的顺序边际贡献。
+- I0−I5：Profile Curvature在前四通道基础上的顺序边际贡献。
+
+I1、I3、I4、I5、I0构成逐步累加主序列；I2必须作为无WAC对照保留，避免把顺序边际贡献误写为各通道的独立贡献。
 
 ## 4. 推荐运行顺序
 
