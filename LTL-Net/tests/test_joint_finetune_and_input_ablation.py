@@ -181,6 +181,38 @@ def test_seed42_replication_keeps_the_winning_joint_finetune_protocol():
     assert seed42["automatic_test_evaluation"] is False
 
 
+def test_terrain_only_final_screening_changes_only_input_protocol_and_identity():
+    config_dir = PROJECT_ROOT / "configs"
+    for seed in (42, 1337):
+        full = json.loads(
+            (
+                config_dir
+                / f"v6_overlap40_joint_finetune_rezero_cmcr_lovasz02_seed{seed}.json"
+            ).read_text(encoding="utf-8")
+        )
+        terrain = json.loads(
+            (
+                config_dir
+                / f"v6_overlap40_joint_finetune_rezero_cmcr_lovasz02_terrain_only_seed{seed}.json"
+            ).read_text(encoding="utf-8")
+        )
+        allowed = {
+            "experiment",
+            "hypothesis",
+            "unique_variable",
+            "channel_mode",
+            "expected_initial_validation_miou_fg",
+            "run_name",
+        }
+        assert set(terrain) == set(full)
+        for key in full:
+            if key not in allowed:
+                assert terrain[key] == full[key], (seed, key)
+        assert terrain["channel_mode"] == "terrain_only"
+        assert terrain["expected_initial_validation_miou_fg"] is None
+        assert terrain["automatic_test_evaluation"] is False
+
+
 def test_input_ablation_configs_keep_protocol_fixed_and_only_change_channel_mode():
     config_dir = PROJECT_ROOT / "configs"
     modes = (

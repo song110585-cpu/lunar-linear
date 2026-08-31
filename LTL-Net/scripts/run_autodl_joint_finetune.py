@@ -64,8 +64,10 @@ def main() -> None:
         raise ValueError("controlled experiment requires physical batch4")
     if config["boundary_weight"] != 0.0:
         raise ValueError("boundary auxiliary loss must remain disabled")
-    if config["channel_mode"] != "full":
-        raise ValueError("loss screening must use the full five-channel input")
+    if config["channel_mode"] not in {"full", "terrain_only"}:
+        raise ValueError(
+            "controlled joint fine-tuning supports only full or terrain_only input"
+        )
     if config["selection_metric"] != "val_mIoU_fg":
         raise ValueError("selection metric must be val_mIoU_fg")
     if config["automatic_test_evaluation"] is not False:
@@ -201,13 +203,19 @@ def main() -> None:
     initial = result.get("initial_validation")
     if initial is None:
         raise RuntimeError("joint fine-tune did not record epoch-zero validation")
-    expected_initial = config["expected_initial_validation_miou_fg"]
-    tolerance = config["initial_validation_tolerance"]
-    if abs(initial["miou_fg"] - expected_initial) > tolerance:
-        raise RuntimeError(
-            "epoch-zero validation mismatch: "
-            f"actual={initial['miou_fg']}, expected={expected_initial}, "
-            f"tolerance={tolerance}"
+    expected_initial = config.get("expected_initial_validation_miou_fg")
+    if expected_initial is not None:
+        tolerance = config["initial_validation_tolerance"]
+        if abs(initial["miou_fg"] - expected_initial) > tolerance:
+            raise RuntimeError(
+                "epoch-zero validation mismatch: "
+                f"actual={initial['miou_fg']}, expected={expected_initial}, "
+                f"tolerance={tolerance}"
+            )
+    else:
+        print(
+            "Epoch-zero Val reference was intentionally unset for the new input "
+            f"protocol; recorded actual mIoU-FG={initial['miou_fg']:.10f}."
         )
     archive_path = shutil.make_archive(str(result_dir), "zip", root_dir=result_dir)
     print(f"Training complete: {result_dir}")
