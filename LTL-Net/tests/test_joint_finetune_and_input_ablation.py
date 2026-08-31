@@ -146,6 +146,39 @@ def test_joint_finetune_configs_differ_only_by_lovasz_hypothesis_and_identity():
     assert control["automatic_test_evaluation"] is False
 
 
+def test_seed42_replication_keeps_the_winning_joint_finetune_protocol():
+    config_dir = PROJECT_ROOT / "configs"
+    seed1337 = json.loads(
+        (config_dir / "v6_overlap40_joint_finetune_rezero_cmcr_lovasz02_seed1337.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    seed42 = json.loads(
+        (config_dir / "v6_overlap40_joint_finetune_rezero_cmcr_lovasz02_seed42.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    allowed = {
+        "experiment",
+        "hypothesis",
+        "unique_variable",
+        "seed",
+        "expected_init_checkpoint_sha256",
+        "expected_initial_validation_miou_fg",
+        "run_name",
+    }
+    assert set(seed42) == set(seed1337)
+    for key in seed1337:
+        if key not in allowed:
+            assert seed42[key] == seed1337[key], key
+    assert seed42["seed"] == 42
+    assert seed42["lovasz_weight"] == 0.2
+    assert seed42["expected_init_checkpoint_sha256"] == (
+        "2920e0a91b4d9998069e70ee4137669462e6e41bb6753c1749277616dd657e7f"
+    )
+    assert seed42["automatic_test_evaluation"] is False
+
+
 def test_input_ablation_configs_keep_protocol_fixed_and_only_change_channel_mode():
     config_dir = PROJECT_ROOT / "configs"
     modes = ("full", "wac_only", "terrain_only", "wac_dem")

@@ -1,0 +1,55 @@
+{
+  "experiment": "v6_overlap40_joint_finetune_rezero_cmcr_lovasz02_seed42",
+  "hypothesis": "The winning CE plus 0.2 Lovasz joint-fine-tuning protocol should improve the independently trained seed42 A-prime plus CMCR checkpoint.",
+  "unique_variable": "replication seed and its seed-matched complete initialization checkpoint change from 1337 to 42; architecture, trainable scope, optimizer, data and stopping rule remain fixed",
+  "module": "gated_rezero_cmcr",
+  "encoder": "resnet50",
+  "encoder_weights": "none",
+  "seed": 42,
+  "epochs": 20,
+  "early_stopping_patience": 5,
+  "batch_size": 4,
+  "accum_steps": 1,
+  "num_workers": 2,
+  "learning_rate": 0.00001,
+  "boundary_weight": 0.0,
+  "foreground_weight": 0.0,
+  "lovasz_weight": 0.2,
+  "channel_mode": "full",
+  "freeze_base": false,
+  "joint_finetune": true,
+  "freeze_encoder": true,
+  "freeze_batch_norm": true,
+  "expected_trainable_parameter_count": 3918988,
+  "expected_init_checkpoint_sha256": "2920e0a91b4d9998069e70ee4137669462e6e41bb6753c1749277616dd657e7f",
+  "expected_initial_validation_miou_fg": 0.711410865187645,
+  "initial_validation_tolerance": 0.0001,
+  "selection_metric": "val_mIoU_fg",
+  "run_name": "v6_overlap40_joint_finetune_rezero_cmcr_lovasz02_seed42_batch4_valfg",
+  "expected_tiles": {
+    "train": 1598,
+    "val": 200,
+    "test": 200
+  },
+  "expected_mean": [
+    0.15665339073973303,
+    0.6052870962271574,
+    0.22171011101838023,
+    0.5087022443378417,
+    0.46687463729626205
+  ],
+  "expected_std": [
+    0.07239327406001447,
+    0.35159567816693277,
+    0.23999408652260576,
+    0.18305312443820845,
+    0.18653673179588806
+  ],
+  "expected_metadata_sha256": {
+    "dataset_protocol.json": "c4fb9282ad3da6ae5b7cd1fc61603b665c38ed5e26a61e92c78332f0e5552763",
+    "dataset_summary.json": "e56042b0e9a84eef330bda65fb0eeee94a66faa1769e68a487f06feaa19ede7b",
+    "normalization_stats.json": "866d9ab4e80ce6abf3189d60578fb53e4f99d5fe9233270bd31f5a6d09b740b2",
+    "tile_manifest.csv": "e1eb2a8ddf2ed6c2a6f57277a1e8151ee8f4b6b9fa7c5a57d39f1a9ec9d2d4d9"
+  },
+  "automatic_test_evaluation": false
+}

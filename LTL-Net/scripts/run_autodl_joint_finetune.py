@@ -54,8 +54,8 @@ def main() -> None:
 
     if config["module"] != "gated_rezero_cmcr":
         raise ValueError(f"unexpected module: {config['module']}")
-    if config["seed"] != 1337:
-        raise ValueError("first controlled screen must use seed1337")
+    if config["seed"] not in {42, 1337}:
+        raise ValueError("controlled joint fine-tuning supports only seed42 or seed1337")
     if not config["joint_finetune"] or config["freeze_base"]:
         raise ValueError("joint fine-tuning must be enabled without freeze_base")
     if not config["freeze_encoder"] or not config["freeze_batch_norm"]:

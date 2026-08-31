@@ -35,6 +35,23 @@ INIT_CHECKPOINT = Path('.../best_model.pth')
 3. F1相对F0低于0.10 pp，不登记为有效增益。
 4. F1相对F0达到0.20 pp后，再生成seed42复验，不提前查看Test。
 
+### F1 seed42复验
+
+seed1337中F1相对F0提高0.4835 pp，进入seed42复验。使用：
+
+```text
+notebooks/autodl_v6_overlap40_joint_finetune_rezero_cmcr_lovasz02_seed42.ipynb
+```
+
+seed42初始checkpoint必须为独立训练的A′→CMCR完整权重：
+
+```text
+SHA-256: 2920e0a91b4d9998069e70ee4137669462e6e41bb6753c1749277616dd657e7f
+初始Val mIoU-FG: 0.7114108652
+```
+
+除seed及其匹配的初始checkpoint外，训练协议与seed1337 F1完全相同。Loss曲线用于诊断过拟合和概率置信度，不改变预注册的Val mIoU-FG选模规则。若seed42相对自身epoch 0仍为正增益，则锁定F1协议；若退化，再补跑seed42 F0定位是联合微调还是Lovasz导致。
+
 ## 3. DeepLab输入影像消融 I0-I3
 
 | 实验 | channel_mode | 有效通道 | AutoDL Notebook | Kaggle Notebook |
