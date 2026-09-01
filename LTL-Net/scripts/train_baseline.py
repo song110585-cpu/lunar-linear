@@ -204,12 +204,16 @@ if __name__ == '__main__':
     parser.add_argument('--run-name', default=None, help='输出目录名称；默认由模型和seed生成')
     parser.add_argument('--eval-only', action='store_true',
                         help='只加载 checkpoint 并评估 test，不进行训练')
+    parser.add_argument('--skip-test-evaluation', action='store_true',
+                        help='训练完成后不读取Test；用于先锁定Val模型、稍后统一评价Test')
     parser.add_argument('--checkpoint', default=None,
                         help='--eval-only 使用的模型权重路径；扩展名可以是 .pth/.pt/.zip')
     args = parser.parse_args()
 
     if args.eval_only and not args.checkpoint:
         parser.error('--eval-only 必须同时提供 --checkpoint')
+    if args.eval_only and args.skip_test_evaluation:
+        parser.error('--eval-only 与 --skip-test-evaluation 不能同时使用')
 
     set_seed(args.seed)
 
@@ -284,10 +288,10 @@ if __name__ == '__main__':
     print(f'Model: {args.model} ({args.encoder}), params: {sum(p.numel() for p in model.parameters()):,}')
 
     # ---- 数据 ----
-    test_data = MyDataset(hp.test_image_dir, hp.test_mask_dir)
-    test_iter = DataLoader(test_data, batch_size=hp.test_batchsize, shuffle=False,
-                           drop_last=False, num_workers=args.num_workers, pin_memory=True)
     if args.eval_only:
+        test_data = MyDataset(hp.test_image_dir, hp.test_mask_dir)
+        test_iter = DataLoader(test_data, batch_size=hp.test_batchsize, shuffle=False,
+                               drop_last=False, num_workers=args.num_workers, pin_memory=True)
         train_iter = val_iter = None
         print(f'Eval-only  Test: {len(test_data)}')
     else:
@@ -300,7 +304,14 @@ if __name__ == '__main__':
         val_data = MyDataset(hp.val_image_dir, hp.val_mask_dir)
         val_iter = DataLoader(val_data, batch_size=hp.test_batchsize, shuffle=False,
                               drop_last=False, num_workers=args.num_workers, pin_memory=True)
-        print(f'Train: {len(train_data)}  Val: {len(val_data)}  Test: {len(test_data)}')
+        if args.skip_test_evaluation:
+            test_iter = None
+            print(f'Train: {len(train_data)}  Val: {len(val_data)}  Test: locked')
+        else:
+            test_data = MyDataset(hp.test_image_dir, hp.test_mask_dir)
+            test_iter = DataLoader(test_data, batch_size=hp.test_batchsize, shuffle=False,
+                                   drop_last=False, num_workers=args.num_workers, pin_memory=True)
+            print(f'Train: {len(train_data)}  Val: {len(val_data)}  Test: {len(test_data)}')
 
     # ---- 损失 ----
     class_weights = torch.tensor([0.15, 1.0, 2.73, 1.98, 2.12], dtype=torch.float32).to(device)
@@ -324,16 +335,20 @@ if __name__ == '__main__':
     if args.eval_only:
         train_summary = None
 
-    # ---- 最终测试 ----
-    print('\n' + '=' * 60)
-    print('最终测试集评估 (Test Set Evaluation)')
-    print('=' * 60)
-    if not args.eval_only:
-        model.load_state_dict(load_checkpoint_state(checkpoint_path), strict=True)
-    final_metrics = net_test(model=model, test_iter=test_iter, loss=loss,
-                             record_path=hp.record_path, num_classes=NUM_CLASSES,
-                             epoch='final', save=False, max_steps=hp.max_steps,
-                             return_metrics=True)
+    # ---- Test只在显式允许时评价 ----
+    if args.skip_test_evaluation:
+        print('\nTest evaluation is locked and was not executed.')
+        final_metrics = None
+    else:
+        print('\n' + '=' * 60)
+        print('最终测试集评估 (Test Set Evaluation)')
+        print('=' * 60)
+        if not args.eval_only:
+            model.load_state_dict(load_checkpoint_state(checkpoint_path), strict=True)
+        final_metrics = net_test(model=model, test_iter=test_iter, loss=loss,
+                                 record_path=hp.record_path, num_classes=NUM_CLASSES,
+                                 epoch='final', save=False, max_steps=hp.max_steps,
+                                 return_metrics=True)
     try:
         git_commit = subprocess.check_output(
             ['git', 'rev-parse', 'HEAD'], cwd=_root, text=True
@@ -354,6 +369,7 @@ if __name__ == '__main__':
         'effective_batch_size': hp.train_batchsize * hp.accum_steps,
         'max_steps': hp.max_steps,
         'selection_metric': 'val_mIoU_fg',
+        'automatic_test_evaluation': not args.skip_test_evaluation,
         'best_epoch': None if train_summary is None else train_summary['best_epoch'],
         'best_val_miou_fg': None if train_summary is None else train_summary['best_val_miou_fg'],
         'history_file': None if train_summary is None else 'history.csv',
