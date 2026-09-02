@@ -36,6 +36,7 @@ import metrics
 from MyDataset import MyDataset
 from experiment_artifacts import save_training_history
 from models.dlinknet import DLinkNet
+from models.pidnet_multiclass import PIDNetSmall, load_pidnet_imagenet_weights
 
 
 def set_seed(seed):
@@ -185,7 +186,7 @@ def train(model, train_iter, val_iter, loss, opt, num_epochs, record_path, lr_sc
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='Unet',
-                        help='模型名: DLinkNet，或smp的Unet/UnetPlusPlus/DeepLabV3/DeepLabV3Plus/PSPNet/Linknet/FPN/PAN/MAnet')
+                        help='模型名: DLinkNet/PIDNet-S，或smp的Unet/UnetPlusPlus/DeepLabV3/DeepLabV3Plus/PSPNet/Linknet/FPN/PAN/MAnet')
     parser.add_argument('--encoder', default='resnet50', help='backbone, 默认 resnet50')
     parser.add_argument('--data-dir', default=None,
                         help='数据集根目录(含 train/val/test 子目录), 默认自动检测 Kaggle/本地')
@@ -208,6 +209,8 @@ if __name__ == '__main__':
                         help='训练完成后不读取Test；用于先锁定Val模型、稍后统一评价Test')
     parser.add_argument('--checkpoint', default=None,
                         help='--eval-only 使用的模型权重路径；扩展名可以是 .pth/.pt/.zip')
+    parser.add_argument('--pretrained-checkpoint', default=None,
+                        help='PIDNet-S训练使用的官方ImageNet预训练权重；其他模型忽略')
     args = parser.parse_args()
 
     if args.eval_only and not args.checkpoint:
@@ -269,13 +272,27 @@ if __name__ == '__main__':
     print(f'device:{device}     GPU available:{torch.cuda.is_available()}')
 
     # ---- 模型 (D-LinkNet或SMP baseline) ----
-    if args.model.lower() in ('dlinknet', 'd-linknet'):
+    normalized_model = args.model.lower().replace('-', '').replace('_', '')
+    encoder_identity = args.encoder
+    pretrained_loading = None
+    if normalized_model == 'dlinknet':
         model = DLinkNet(
             encoder_name=args.encoder,
             encoder_weights=None if args.eval_only else "imagenet",
             in_channels=IN_CHANNELS,
             classes=NUM_CLASSES,
         ).to(device)
+    elif normalized_model in ('pidnet', 'pidnets'):
+        encoder_identity = 'native_pidnet_s'
+        model = PIDNetSmall(in_channels=IN_CHANNELS, classes=NUM_CLASSES).to(device)
+        if not args.eval_only:
+            if not args.pretrained_checkpoint:
+                parser.error('PIDNet-S正式训练必须提供 --pretrained-checkpoint')
+            pretrained_path = os.path.abspath(args.pretrained_checkpoint)
+            if not os.path.isfile(pretrained_path):
+                raise FileNotFoundError(f'PIDNet-S预训练权重不存在: {pretrained_path}')
+            pretrained_loading = load_pidnet_imagenet_weights(model, pretrained_path)
+            print(f'PIDNet-S ImageNet weights: {pretrained_loading}')
     else:
         assert hasattr(smp, args.model), f'smp 没有模型 {args.model}'
         model_cls = getattr(smp, args.model)
@@ -285,7 +302,7 @@ if __name__ == '__main__':
             in_channels=IN_CHANNELS,
             classes=NUM_CLASSES,
         ).to(device)
-    print(f'Model: {args.model} ({args.encoder}), params: {sum(p.numel() for p in model.parameters()):,}')
+    print(f'Model: {args.model} ({encoder_identity}), params: {sum(p.numel() for p in model.parameters()):,}')
 
     # ---- 数据 ----
     if args.eval_only:
@@ -357,7 +374,7 @@ if __name__ == '__main__':
         git_commit = 'unknown'
     result = {
         'model': args.model,
-        'encoder': args.encoder,
+        'encoder': encoder_identity,
         'seed': args.seed,
         'epochs': args.epochs,
         'data_root': DATA_ROOT,
@@ -375,6 +392,8 @@ if __name__ == '__main__':
         'history_file': None if train_summary is None else 'history.csv',
         'eval_only': args.eval_only,
         'checkpoint': checkpoint_path,
+        'pretrained_checkpoint': args.pretrained_checkpoint,
+        'pretrained_loading': pretrained_loading,
         'test': final_metrics,
     }
     metrics_path = os.path.join(hp.record_path, 'metrics.json')

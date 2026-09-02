@@ -1,0 +1,29 @@
+{
+  "experiment": "v6_overlap40_pidnet_s_full_seed42",
+  "hypothesis": "Evaluate a recent detail-context-boundary network on five-class lunar linear-structure segmentation.",
+  "comparison_scope": "five-channel PIDNet-S comparison using the official inference graph and the common weighted cross-entropy protocol",
+  "model": "PIDNet-S",
+  "encoder": "native_pidnet_s",
+  "encoder_weights": "imagenet",
+  "pretrained_filename": "PIDNet_S_ImageNet.pth.tar",
+  "expected_pretrained_md5": "0d25ff46681c795d3c7bc8eb6aa62e76",
+  "expected_pretrained_loaded_tensors": 302,
+  "channel_mode": "full",
+  "seed": 42,
+  "epochs": 80,
+  "batch_size": 4,
+  "accum_steps": 1,
+  "num_workers": 2,
+  "learning_rate": 0.00005,
+  "auxiliary_losses": false,
+  "selection_metric": "val_mIoU_fg",
+  "run_name": "v6_overlap40_PIDNetS_seed42_formal80_valfg",
+  "expected_tiles": {"train": 1598, "val": 200, "test": 200},
+  "expected_metadata_sha256": {
+    "dataset_protocol.json": "c4fb9282ad3da6ae5b7cd1fc61603b665c38ed5e26a61e92c78332f0e5552763",
+    "dataset_summary.json": "e56042b0e9a84eef330bda65fb0eeee94a66faa1769e68a487f06feaa19ede7b",
+    "normalization_stats.json": "866d9ab4e80ce6abf3189d60578fb53e4f99d5fe9233270bd31f5a6d09b740b2",
+    "tile_manifest.csv": "e1eb2a8ddf2ed6c2a6f57277a1e8151ee8f4b6b9fa7c5a57d39f1a9ec9d2d4d9"
+  },
+  "automatic_test_evaluation": false
+}

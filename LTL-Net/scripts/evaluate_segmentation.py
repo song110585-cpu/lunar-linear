@@ -27,6 +27,7 @@ from tqdm import tqdm
 import metrics
 from MyDataset import CHANNEL_MODE_MASKS, MyDataset
 from models.dlinknet import DLinkNet
+from models.pidnet_multiclass import PIDNetSmall
 from models.ltl_net import LTLNet
 from models.module_models import build_module_model
 from train_module_experiment import masks_to_boundaries
@@ -92,6 +93,8 @@ def build_model(args):
             in_channels=5,
             classes=5,
         )
+    if normalized in ("pidnet", "pidnet_s", "pidnets"):
+        return PIDNetSmall(in_channels=5, classes=5)
     if not hasattr(smp, args.model):
         raise ValueError(f"segmentation_models_pytorch 中不存在模型: {args.model}")
     return getattr(smp, args.model)(
