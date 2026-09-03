@@ -28,7 +28,6 @@ import metrics
 from MyDataset import CHANNEL_MODE_MASKS, MyDataset
 from models.dlinknet import DLinkNet
 from models.pidnet_multiclass import PIDNetSmall
-from models.rs3mamba_official_adapter import build_rs3mamba
 from models.ltl_net import LTLNet
 from models.module_models import build_module_model
 from train_module_experiment import masks_to_boundaries
@@ -96,13 +95,6 @@ def build_model(args):
         )
     if normalized in ("pidnet", "pidnet_s", "pidnets"):
         return PIDNetSmall(in_channels=5, classes=5)
-    if normalized == "rs3mamba":
-        if not args.rs3mamba_source_dir:
-            raise ValueError("RS3Mamba 评价必须传入 --rs3mamba-source-dir")
-        model, _ = build_rs3mamba(
-            args.rs3mamba_source_dir, in_channels=5, classes=5
-        )
-        return model
     if not hasattr(smp, args.model):
         raise ValueError(f"segmentation_models_pytorch 中不存在模型: {args.model}")
     return getattr(smp, args.model)(
@@ -315,8 +307,6 @@ def main():
                         help="LTLNet、DLinkNet，或smp模型名，如DeepLabV3Plus/Unet/Linknet")
     parser.add_argument("--encoder", default="resnet50")
     parser.add_argument("--detail-channels", type=int, default=16)
-    parser.add_argument("--rs3mamba-source-dir", default=None,
-                        help="官方sstary/SSRS仓库或其中RS3Mamba目录；仅RS3Mamba使用")
     parser.add_argument("--data-dir", required=True, help="含 split/image 与 split/mask 的数据集根目录")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output-dir", required=True)

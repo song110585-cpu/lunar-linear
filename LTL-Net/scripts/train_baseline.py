@@ -37,7 +37,6 @@ from MyDataset import MyDataset
 from experiment_artifacts import save_training_history
 from models.dlinknet import DLinkNet
 from models.pidnet_multiclass import PIDNetSmall, load_pidnet_imagenet_weights
-from models.rs3mamba_official_adapter import build_rs3mamba
 
 
 def set_seed(seed):
@@ -187,7 +186,7 @@ def train(model, train_iter, val_iter, loss, opt, num_epochs, record_path, lr_sc
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='Unet',
-                        help='模型名: DLinkNet/PIDNet-S/RS3Mamba，或smp的Unet/UnetPlusPlus/DeepLabV3/DeepLabV3Plus/PSPNet/Linknet/FPN/PAN/MAnet')
+                        help='模型名: DLinkNet/PIDNet-S，或smp的Unet/UnetPlusPlus/DeepLabV3/DeepLabV3Plus/PSPNet/Linknet/FPN/PAN/MAnet')
     parser.add_argument('--encoder', default='resnet50', help='backbone, 默认 resnet50')
     parser.add_argument('--data-dir', default=None,
                         help='数据集根目录(含 train/val/test 子目录), 默认自动检测 Kaggle/本地')
@@ -211,11 +210,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', default=None,
                         help='--eval-only 使用的模型权重路径；扩展名可以是 .pth/.pt/.zip')
     parser.add_argument('--pretrained-checkpoint', default=None,
-                        help='PIDNet-S的ImageNet权重，或RS3Mamba的官方VMamba-Tiny权重')
-    parser.add_argument('--resnet-pretrained-checkpoint', default=None,
-                        help='RS3Mamba官方SWSL-ResNet18预训练权重；其他模型忽略')
-    parser.add_argument('--rs3mamba-source-dir', default=None,
-                        help='官方sstary/SSRS仓库或其中RS3Mamba目录；仅RS3Mamba使用')
+                        help='PIDNet-S训练使用的官方ImageNet预训练权重；其他模型忽略')
     args = parser.parse_args()
 
     if args.eval_only and not args.checkpoint:
@@ -298,23 +293,6 @@ if __name__ == '__main__':
                 raise FileNotFoundError(f'PIDNet-S预训练权重不存在: {pretrained_path}')
             pretrained_loading = load_pidnet_imagenet_weights(model, pretrained_path)
             print(f'PIDNet-S ImageNet weights: {pretrained_loading}')
-    elif normalized_model == 'rs3mamba':
-        encoder_identity = 'resnet18_swsl+vmamba_tiny'
-        if not args.rs3mamba_source_dir:
-            parser.error('RS3Mamba 必须提供 --rs3mamba-source-dir')
-        if not args.eval_only and not args.pretrained_checkpoint:
-            parser.error('RS3Mamba正式训练必须提供 --pretrained-checkpoint (VMamba-Tiny)')
-        if not args.eval_only and not args.resnet_pretrained_checkpoint:
-            parser.error('RS3Mamba正式训练必须提供 --resnet-pretrained-checkpoint')
-        model, pretrained_loading = build_rs3mamba(
-            args.rs3mamba_source_dir,
-            in_channels=IN_CHANNELS,
-            classes=NUM_CLASSES,
-            resnet_checkpoint=None if args.eval_only else args.resnet_pretrained_checkpoint,
-            vmamba_checkpoint=None if args.eval_only else args.pretrained_checkpoint,
-        )
-        model = model.to(device)
-        print(f'RS3Mamba pretrained weights: {pretrained_loading}')
     else:
         assert hasattr(smp, args.model), f'smp 没有模型 {args.model}'
         model_cls = getattr(smp, args.model)
@@ -415,8 +393,6 @@ if __name__ == '__main__':
         'eval_only': args.eval_only,
         'checkpoint': checkpoint_path,
         'pretrained_checkpoint': args.pretrained_checkpoint,
-        'resnet_pretrained_checkpoint': args.resnet_pretrained_checkpoint,
-        'rs3mamba_source_dir': args.rs3mamba_source_dir,
         'pretrained_loading': pretrained_loading,
         'test': final_metrics,
     }
